@@ -322,6 +322,9 @@ fn webhook_action_uses_local_http_server_and_captures_response() {
             }
         };
         stream
+            .set_nonblocking(false)
+            .expect("restore blocking request reads");
+        stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .expect("set request timeout");
         let mut request = [0_u8; 4096];
