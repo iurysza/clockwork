@@ -1,0 +1,13 @@
+{
+  "release-as": "0.1.0",
+  "bump-minor-pre-major": true,
+  "packages": {
+    ".": {
+      "release-type": "rust",
+      "package-name": "clockwork",
+      "extra-files": ["Cargo.lock"],
+      "include-component-in-tag": false,
+      "include-v-in-tag": true
+    }
+  }
+}
