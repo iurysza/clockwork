@@ -1,170 +1,148 @@
-/// Schedule parser edge cases and validation tests.
-/// Core parsing tests are in the unit test module inside parser.rs.
-/// These are integration-level tests exercising the CLI error messages.
+//! Integration coverage for the schedule grammar exposed by `clockwork job create`.
 mod helpers;
 
 use helpers::TestEnv;
-use predicates::prelude::*;
+use serde_json::Value;
+
+fn preview(env: &TestEnv, name: &str, schedule: &str) -> std::process::Output {
+    env.cmd()
+        .args([
+            "job",
+            "create",
+            name,
+            "--schedule",
+            schedule,
+            "--command",
+            "echo test",
+            "--dry-run",
+            "--json",
+        ])
+        .output()
+        .expect("run job create preview")
+}
+
+fn valid_preview(env: &TestEnv, name: &str, schedule: &str) -> Value {
+    let output = preview(env, name, schedule);
+    assert!(
+        output.status.success(),
+        "preview failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn invalid_preview(env: &TestEnv, schedule: &str) -> Value {
+    let output = preview(env, "invalid", schedule);
+    assert!(
+        !output.status.success(),
+        "invalid schedule unexpectedly passed"
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
 
 #[test]
 fn schedule_every_zero_rejected() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args(["add", "every 0h", "--run", "echo test"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Could not parse schedule"));
+    let error = invalid_preview(&TestEnv::new(), "every 0h");
+    assert_eq!(error["error"]["code"], "CW_INVALID_INPUT");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("greater than zero")
+    );
 }
 
 #[test]
 fn schedule_every_minutes_max() {
-    let env = TestEnv::new();
-    // 59m is valid
-    env.cmd()
-        .args([
-            "add",
-            "every 59m",
-            "--run",
-            "echo test",
-            "--name",
-            "max-min",
-        ])
-        .assert()
-        .success();
-
-    // 60m is invalid
-    env.cmd()
-        .args(["add", "every 60m", "--run", "echo test"])
-        .assert()
-        .failure();
+    valid_preview(&TestEnv::new(), "max-min", "every 59m");
+    invalid_preview(&TestEnv::new(), "every 60m");
 }
 
 #[test]
-fn schedule_in_creates_oneshot() {
+fn schedule_relative_and_bare_durations_create_one_shot_previews() {
+    for (name, schedule) in [("relative", "in 4h"), ("seconds", "10s"), ("minutes", "5m")] {
+        let plan = valid_preview(&TestEnv::new(), name, schedule);
+        assert_eq!(plan["expected_state"]["type"], "disabled");
+        assert_eq!(plan["external_effect"]["type"], "none");
+    }
+}
+
+#[test]
+fn relative_one_shot_preview_provides_the_absolute_apply_value() {
     let env = TestEnv::new();
-    env.cmd()
+    let plan = valid_preview(&env, "relative-apply", "in 4h");
+    let schedule = plan["schedule"].as_str().expect("normalized schedule");
+    assert!(chrono::DateTime::parse_from_rfc3339(schedule).is_ok());
+
+    let rejected = env
+        .cmd()
         .args([
-            "add",
+            "job",
+            "create",
+            "relative-apply",
+            "--schedule",
             "in 4h",
-            "--run",
-            "echo oneshot",
-            "--name",
-            "oneshot-job",
+            "--command",
+            "echo test",
+            "--yes",
+            "--if-revision",
+            plan["revision"].as_str().unwrap(),
             "--json",
         ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"schedule_input\": \"in 4h\""));
-}
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let error: Value = serde_json::from_slice(&rejected.stdout).unwrap();
+    assert_eq!(error["error"]["code"], "CW_INVALID_INPUT");
 
-#[test]
-fn schedule_iso_datetime() {
-    let env = TestEnv::new();
-    env.cmd()
+    let applied = env
+        .cmd()
         .args([
-            "add",
-            "2099-12-31T23:59:59Z",
-            "--run",
-            "echo future",
-            "--name",
-            "future-job",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Created job future-job"));
-}
-
-#[test]
-fn schedule_past_datetime_rejected() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args(["add", "2020-01-01T00:00:00Z", "--run", "echo past"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("in the past"));
-}
-
-#[test]
-fn schedule_invalid_string() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args(["add", "tomorrow", "--run", "echo test"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Could not parse schedule"));
-}
-
-#[test]
-fn schedule_cron_weekday() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args([
-            "add",
-            "0 9 * * 1-5",
-            "--run",
-            "echo weekday",
-            "--name",
-            "weekday",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
-fn schedule_cron_invalid() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args(["add", "99 99 99 99 99", "--run", "echo test"])
-        .assert()
-        .failure();
-}
-
-#[test]
-fn schedule_bare_seconds_oneshot() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args(["add", "10s", "--run", "echo quick", "--name", "quick"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Created job quick"));
-}
-
-#[test]
-fn schedule_bare_minutes_oneshot() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args(["add", "5m", "--run", "echo fivemin", "--name", "fivemin"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Created job fivemin"));
-}
-
-#[test]
-fn schedule_every_seconds_recurring() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args([
-            "add",
-            "every 30s",
-            "--run",
-            "echo tick",
-            "--name",
-            "ticker",
+            "job",
+            "create",
+            "relative-apply",
+            "--schedule",
+            schedule,
+            "--command",
+            "echo test",
+            "--yes",
+            "--if-revision",
+            plan["revision"].as_str().unwrap(),
             "--json",
         ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "\"schedule_input\": \"every 30s\"",
-        ));
+        .output()
+        .unwrap();
+    assert!(applied.status.success());
 }
 
 #[test]
-fn schedule_every_zero_seconds_rejected() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args(["add", "every 0s", "--run", "echo test"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Could not parse schedule"));
+fn schedule_iso_datetime_accepts_future_and_rejects_past() {
+    valid_preview(&TestEnv::new(), "future", "2099-12-31T23:59:59Z");
+    let error = invalid_preview(&TestEnv::new(), "2020-01-01T00:00:00Z");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("in the past")
+    );
+}
+
+#[test]
+fn schedule_invalid_string_and_cron_are_checked_by_the_public_parser() {
+    let invalid = invalid_preview(&TestEnv::new(), "tomorrow");
+    assert!(
+        invalid["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Could not parse schedule")
+    );
+    valid_preview(&TestEnv::new(), "weekday", "0 9 * * 1-5");
+    invalid_preview(&TestEnv::new(), "99 99 99 99 99");
+}
+
+#[test]
+fn schedule_every_seconds_recurs_and_rejects_zero() {
+    valid_preview(&TestEnv::new(), "ticker", "every 30s");
+    invalid_preview(&TestEnv::new(), "every 0s");
 }

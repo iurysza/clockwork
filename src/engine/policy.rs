@@ -291,13 +291,15 @@ pub struct FailureRequest {
 
 #[derive(Debug, Clone)]
 pub struct CompletionPlan {
-    pub job: Option<Job>,
     pub record: RunRecord,
     pub failure: Option<FailureRequest>,
 }
 
+/// Build the history record and fallback request for a finished attempt.
+/// Runtime bookkeeping (claim clearing, counters, one-shot completion) is
+/// owned by the runtime store's `CompleteRun` mutation — this policy only
+/// classifies the outcome.
 pub fn complete_run(
-    current_job: Option<&Job>,
     attempt: &RunAttempt,
     outcome: &RunOutcome,
     times: RunTimes,
@@ -307,44 +309,6 @@ pub fn complete_run(
     let exit_code = outcome.exit_code();
     let error_message = outcome.error_message();
     let recorded_for = attempt.recorded_for();
-
-    let mut updated_job = current_job.cloned();
-    if let Some(job) = updated_job.as_mut() {
-        job.last_scheduled_at = Some(
-            job.last_scheduled_at
-                .map_or(recorded_for, |current| current.max(recorded_for)),
-        );
-        if matches!(attempt.source, InvocationSource::Scheduled { .. })
-            && job
-                .in_flight
-                .as_ref()
-                .is_some_and(|claim| claim.run_id == attempt.run_id)
-        {
-            job.in_flight = None;
-        }
-        job.run_count += 1;
-        job.updated_at = times.finished_at;
-        job.last_run = Some(LastRun {
-            run_id: attempt.run_id.clone(),
-            started_at: times.started_at,
-            finished_at: times.finished_at,
-            status,
-            exit_code,
-            log_path: log_path.clone(),
-            error_message: error_message.clone(),
-        });
-
-        if status.should_trigger_fallback() {
-            job.consecutive_failures = job.consecutive_failures.saturating_add(1);
-        } else if status == RunStatus::Success {
-            job.consecutive_failures = 0;
-        }
-
-        if job.is_one_shot() && !status.is_internal_error() {
-            job.status = JobStatus::Completed;
-            job.completed_at = Some(times.finished_at);
-        }
-    }
 
     let record = RunRecord {
         run_id: attempt.run_id.clone(),
@@ -367,12 +331,7 @@ pub fn complete_run(
         log_path,
         recorded_for,
     });
-
-    CompletionPlan {
-        job: updated_job,
-        record,
-        failure,
-    }
+    CompletionPlan { record, failure }
 }
 
 #[derive(Debug, Clone)]
@@ -448,6 +407,8 @@ mod tests {
             completed_at: None,
             consecutive_failures: 0,
             managed_by: None,
+            source_revision: None,
+            generation: 0,
         }
     }
 
@@ -590,11 +551,9 @@ mod tests {
     }
 
     #[test]
-    fn successful_one_shot_completion_updates_job_and_record() {
-        let job = job(JobSchedule::OneShot { fire_at: at(10) });
+    fn successful_one_shot_completion_builds_a_success_record() {
         let attempt = RunAttempt::from(&Invocation::scheduled("job", "run", at(10)));
         let plan = complete_run(
-            Some(&job),
             &attempt,
             &RunOutcome::Success { exit_code: 0 },
             RunTimes {
@@ -605,16 +564,14 @@ mod tests {
         );
 
         assert_eq!(plan.record.status, RunStatus::Success);
-        assert_eq!(plan.job.unwrap().status, JobStatus::Completed);
+        assert_eq!(plan.record.run_id, "run");
         assert!(plan.failure.is_none());
     }
 
     #[test]
-    fn internal_error_keeps_one_shot_active_and_requests_fallback() {
-        let job = job(JobSchedule::OneShot { fire_at: at(10) });
+    fn internal_error_builds_an_internal_error_record_and_requests_fallback() {
         let attempt = RunAttempt::from(&Invocation::scheduled("job", "run", at(10)));
         let plan = complete_run(
-            Some(&job),
             &attempt,
             &RunOutcome::InternalError {
                 safe_message: "process could not start".to_string(),
@@ -626,17 +583,14 @@ mod tests {
             "logs/job/run.log".to_string(),
         );
 
-        assert_eq!(plan.job.unwrap().status, JobStatus::Active);
         assert_eq!(plan.record.status, RunStatus::InternalError);
         assert!(plan.failure.is_some());
     }
 
     #[test]
     fn failed_completion_requests_fallback() {
-        let job = job(JobSchedule::RecurringInterval { every_seconds: 10 });
         let attempt = RunAttempt::from(&Invocation::manual("job", "run", at(10)));
         let plan = complete_run(
-            Some(&job),
             &attempt,
             &RunOutcome::Failed { exit_code: Some(1) },
             RunTimes {
@@ -646,7 +600,7 @@ mod tests {
             "logs/job/run.log".to_string(),
         );
 
-        assert_eq!(plan.job.unwrap().consecutive_failures, 1);
+        assert_eq!(plan.record.status, RunStatus::Failed);
         assert!(plan.failure.is_some());
     }
 }

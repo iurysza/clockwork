@@ -36,7 +36,7 @@ impl From<Invocation> for SpawnRequest {
     }
 }
 
-/// Run one dispatch tick: find all due jobs and launch `_exec` for each.
+/// Run one dispatch tick: find all due jobs and launch `_internal execute` for each.
 pub fn dispatch(now: DateTime<Utc>) -> Result<()> {
     let Some(_dispatch_lock) = FileLock::dispatch_non_blocking()? else {
         return Ok(());
@@ -48,7 +48,9 @@ pub fn dispatch(now: DateTime<Utc>) -> Result<()> {
     let config = load_config()?;
 
     for job_id in loaded.jobs.keys() {
-        process_job(job_id, now)?;
+        if let Err(error) = process_job(job_id, now) {
+            eprintln!("dispatch rejected job {job_id}: {error:#}");
+        }
     }
 
     archive_completed_jobs(now, config.archive_after_hours)?;
@@ -74,7 +76,9 @@ fn archive_completed_jobs(now: DateTime<Utc>, archive_after_hours: u64) -> Resul
     let mut changed = false;
 
     for job in job_state.jobs.values_mut() {
-        if job.status != JobStatus::Completed {
+        // Managed jobs have no archived state or public unarchive path.
+        // Keep completed managed jobs inspectable until the user deletes them.
+        if job.managed_by.as_deref() == Some("managed-job") || job.status != JobStatus::Completed {
             continue;
         }
         let anchor = job.completed_at.unwrap_or(job.updated_at);
@@ -134,12 +138,18 @@ fn maybe_recover_stale_claim(job_id: &str, now: DateTime<Utc>) -> Result<Option<
 }
 
 fn process_job(job_id: &str, now: DateTime<Utc>) -> Result<()> {
-    let effects = {
+    enum Pending {
+        Launch(SpawnRequest),
+        Skipped(DateTime<Utc>),
+    }
+
+    let pending = {
         let _state_lock = FileLock::state()?;
-        let mut job_state = load_state()?;
+        let job_state = load_state()?;
         let Some(job) = job_state.jobs.get(job_id).cloned() else {
             return Ok(());
         };
+        crate::job::inspect::StateInspector::new().verify_managed_runtime(&job, now)?;
 
         let claimed_execution = if job.in_flight.is_some() {
             observe_claimed_execution(job_id)?
@@ -147,20 +157,54 @@ fn process_job(job_id: &str, now: DateTime<Utc>) -> Result<()> {
             ClaimedExecution::NotRunning
         };
         let plan = plan_dispatch(&job, now, claimed_execution, new_run_id())?;
-        if plan.changed {
+
+        // Run claims go through the runtime store's narrow claim API; only
+        // the overlap-skip bookkeeping (which sets no claim) is persisted
+        // as a wholesale state write here.
+        let launches: Vec<Invocation> = plan
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                DispatchEffect::Launch(invocation) => Some(invocation.clone()),
+                DispatchEffect::RecordSkippedOverlap { .. } => None,
+            })
+            .collect();
+        if plan.changed && launches.is_empty() {
+            let mut job_state = job_state;
             job_state.jobs.insert(job_id.to_string(), plan.job);
             state::save_state(&job_state)?;
         }
-        plan.effects
+
+        let mut pending = Vec::new();
+        for effect in plan.effects {
+            match effect {
+                DispatchEffect::RecordSkippedOverlap { scheduled_for } => {
+                    pending.push(Pending::Skipped(scheduled_for));
+                }
+                DispatchEffect::Launch(invocation) => {
+                    let run_id = invocation.run_id.clone();
+                    let scheduled_for = invocation.recorded_for();
+                    // Durably claim before spawning; a lost race means
+                    // another invocation already owns the job.
+                    if crate::job::runtime::FsRuntimeStore::claim_run(
+                        job_id,
+                        run_id.clone(),
+                        scheduled_for,
+                    )? {
+                        pending.push(Pending::Launch(SpawnRequest::from(invocation)));
+                    }
+                }
+            }
+        }
+        pending
     };
 
-    for effect in effects {
+    for effect in pending {
         match effect {
-            DispatchEffect::RecordSkippedOverlap { scheduled_for } => {
+            Pending::Skipped(scheduled_for) => {
                 history::append_record(&skipped_overlap_record(job_id, scheduled_for, now))?;
             }
-            DispatchEffect::Launch(invocation) => {
-                let request = SpawnRequest::from(invocation);
+            Pending::Launch(request) => {
                 if let Err(error) = spawn_exec(&request) {
                     if let Some(record) =
                         clear_claim_with_internal_error(&request.job_id, &request.run_id, now)?
@@ -232,13 +276,14 @@ fn skipped_overlap_record(
     }
 }
 
-/// Spawn `clockwork _exec <job-id> --scheduled-for <ts> --trigger <trigger>` as a detached process.
+/// Spawn `clockwork _internal execute <job-id> --scheduled-for <ts> --trigger <trigger>` as a detached process.
 fn spawn_exec(request: &SpawnRequest) -> Result<()> {
     let clockwork_bin =
         std::env::current_exe().context("could not determine clockwork binary path")?;
     let mut command = Command::new(clockwork_bin);
     command.args([
-        "_exec",
+        "_internal",
+        "execute",
         &request.job_id,
         "--scheduled-for",
         &request.scheduled_for.to_rfc3339(),
@@ -251,9 +296,12 @@ fn spawn_exec(request: &SpawnRequest) -> Result<()> {
     command.stdout(std::process::Stdio::null());
     command.stderr(std::process::Stdio::null());
     detach_exec_process(&mut command);
-    command
-        .spawn()
-        .with_context(|| format!("failed to spawn _exec for job {}", request.job_id))?;
+    command.spawn().with_context(|| {
+        format!(
+            "failed to spawn _internal execute for job {}",
+            request.job_id
+        )
+    })?;
     Ok(())
 }
 

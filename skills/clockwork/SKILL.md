@@ -6,71 +6,72 @@ metadata:
 ---
 # Clockwork
 
-Use `~/.agents/clockwork/jobs.d/<job>/` as the source of truth. Generated runtime state, history, logs, locks, receipts, profiles, and Pi sessions live under `~/.local/state/clockwork/`. Never edit generated state as job configuration.
+Use `clockwork job` for every job change. Managed sources live at `~/.agents/clockwork/jobs.d/<job>/clockwork.yaml` and describe the schedule and action only, never activation. Runtime state, history, logs, locks, receipts, profiles, and Pi sessions live under `~/.local/state/clockwork/`. Never edit runtime state as job configuration.
 
 ## Safe workflow
 
-1. Create or edit one job directory. Its directory name, manifest `name`, and only key under `jobs` must match.
-2. Set every new job to `paused: true`.
-3. Run `clockwork-jobs check <job>` and `clockwork-jobs plan <job>`.
-4. Show the source change and plan. Get approval for apply and for any external effect.
-5. Apply with `clockwork-jobs apply <job> --confirm <job> --no-input`.
-6. Get separate approval for enablement. Change only `paused`, then repeat check, plan, and apply.
-7. Run `clockwork-jobs status <job> --json`. An enabled future job must report `status: active` and the expected non-null `next_run`.
+1. Preview creation: `clockwork job create <job> --schedule <expr> (--command <cmd> | --prompt <text> --profile <name> | --webhook <url>) --dry-run --json`.
+2. Show the creation plan and get approval.
+3. Create the disabled job with the same definition flags plus `--yes --if-revision <revision>`.
+4. Preview enablement: `clockwork job enable <job> --dry-run --json`.
+5. Show the enablement plan and get separate approval.
+6. Enable the job: `clockwork job enable <job> --yes --if-revision <revision>`.
+7. Verify with `clockwork job status <job> --json`. An enabled job must report `scheduled` with a future `next_run`.
 
-Treat `status: active` with `next_run: null` and no run history as blocked. Pause the job. Do not trigger a manual fallback until you confirm that no run or external effect is in flight.
+Use the revision from the matching dry run. For a relative one-time schedule such as `in 4h`, apply the absolute `schedule` value from the preview. A stale revision changes nothing.
 
-Never use `clockwork add`, `clockwork edit`, or `clockwork rm` for managed jobs.
+Treat `scheduled` with a past or null `next_run` and no run history as blocked. Disable the job. Do not trigger a manual run until you confirm that no run or external effect is in flight.
+
+`trigger` is the only immediate-effect command and requires an enabled, idle job. Update and delete refuse to cross a run that is in flight.
 
 ## One-time jobs
 
-Clockwork cannot safely update an existing one-time schedule. The update stamps `last_scheduled_at`, but the dispatcher runs a one-time job only when that field is empty.
+A completed one-time schedule is immutable within its runtime generation. To move it, update with a new future schedule: Clockwork replaces the generation, starts it disabled, and keeps the public name and history stable.
 
-- Create a one-time job with its final future ISO timestamp.
-- Apply it paused, then change only `paused` during enablement.
-- If the timestamp must change, leave the old job paused and create a fresh job name.
-- Before starting the daemon, require the exact future `next_run`.
-- After success, require `status: completed`, `last_run_status: success`, and `next_run: null`.
+- Create or update with the final future time, then enable explicitly.
+- Before starting the daemon, require the exact future `next_run` from status.
+- After success, require `completed` with a successful last run.
 
 ## Actions
 
 ### Command
 
-Command jobs use direct argv execution by default. Add `shell: true` when the command needs shell built-ins, semicolons, pipes, redirects, functions, substitutions, or traps. The job owner must make every external effect idempotent. Prefer a Pi prompt job when the action needs skills, generated content, or several guarded steps.
+Command jobs use direct argv execution by default. Add `--shell` when the command needs shell built-ins, pipes, redirects, or substitutions. The job owner must make every external effect idempotent. Prefer a Pi prompt job when the action needs skills or several guarded steps.
 
 ### Pi prompt
 
-Pi prompt jobs add `pi-profile.json`. Allowed settings are cwd, model, thinking, tools, and project-file trust. The launcher derives profile `clockwork-pi-<job>` and stable session `clockwork-<job>`. Callers cannot choose raw Pi arguments or session IDs.
+Pi prompt jobs reference a registered profile (`clockwork agent list`) or carry a `pi-profile.json` beside the source. Write the companion before previewing creation. With a companion profile, the action profile must be `clockwork-pi-<job>`. Clockwork installs and updates that derived profile, then removes it when no other job uses it. A missing referenced profile, a malformed companion, or a colliding unmanaged profile fails closed.
+
+The companion accepts only cwd, model, thinking, tools, and approveProjectFiles. The launcher derives profile `clockwork-pi-<job>` and stable session `clockwork-<job>`. Callers cannot choose raw Pi arguments or session IDs.
 
 The durable session is stored under `~/.local/state/clockwork/pi-sessions/<job>/`. Scheduled Pi starts through launchd, so validate its runtime environment instead of relying on the interactive shell. Exit code 127 with `env: node: No such file or directory` means the launchd `PATH` is wrong.
 
 ### HTTPS webhook
 
-Webhooks must use HTTPS. Keep headers and credentials out of manifests, command output, logs, and receipts. Use only the approved owner-only environment flow.
+Webhooks must use HTTPS unless `allow_insecure_http` is explicitly enabled. Keep headers and credentials out of sources, command output, logs, and receipts.
 
 ## Verify each boundary
 
 Do not treat one success signal as proof of the whole workflow.
 
-1. Scheduler: inspect the matching run in `CLOCKWORK_HOME="$HOME/.local/state/clockwork" clockwork history --json`.
-2. Agent: inspect the Pi session JSONL and the Clockwork run log under `~/.local/state/clockwork/`.
+1. Scheduler: inspect the matching run in `clockwork job history <job> --json`.
+2. Agent: inspect the Pi session JSONL and the run log under `~/.local/state/clockwork/`.
 3. External effect: inspect the job owner's sanitized receipt or provider message ID.
-4. Services: confirm one Clockwork daemon and that any paused dependency, such as WhatsApp sync, resumed.
+4. Services: confirm one Clockwork daemon and that any paused dependency resumed.
 
 Do not print prompts, webhook headers or bodies, environment values, message bodies, or credentials.
 
 ## Inspect and remove
 
-Use:
-
 ```sh
-clockwork-jobs status [<job>] --json
-CLOCKWORK_HOME="$HOME/.local/state/clockwork" clockwork history --json
+clockwork job status [<job>] --json
+clockwork job history <job> --json
+clockwork job logs <job> --json
 services/clockwork/service.sh logs
 ```
 
-Removal is destructive. Get approval, remove the user-owned source directory, run `clockwork-jobs plan`, then run `clockwork-jobs apply --confirm all --no-input`. Reconciliation removes only runtime objects recorded in its ownership map. It preserves history, receipts, and sessions.
+Removal is destructive. Preview with `clockwork job delete <job> --dry-run --json`, get approval, then apply with `--yes --if-revision <revision>`. Delete refuses while a run is in flight. It removes the runtime job, removes an unused owned profile, and removes the source directory.
 
 ## Rollback
 
-Stop or pause Clockwork first. Confirm that no run or delivery attempt is active. Restore only installer-managed binary, plist, links, and examples from the targeted backup. Preserve `~/.agents/clockwork/` and `~/.local/state/clockwork/`. Get separate approval before reactivating a previous scheduler.
+Stop or disable Clockwork first. Confirm that no run or delivery attempt is active. Restore only installer-managed binary, plist, links, and examples from the targeted backup. Preserve `~/.agents/clockwork/` and `~/.local/state/clockwork/`. Get separate approval before reactivating a previous scheduler.

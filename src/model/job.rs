@@ -86,10 +86,18 @@ pub struct Job {
     /// Number of consecutive `failed/timeout/internal_error` runs since last success.
     #[serde(default)]
     pub consecutive_failures: u32,
-    /// Name of the declarative manifest that owns this job (`clockwork up`).
-    /// `None` for imperatively-added jobs, which `up`/`down` never touch.
+    /// Managed lifecycle marker. Managed jobs are created only through
+    /// `clockwork job`; legacy unmarked runtime entries remain read-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_by: Option<String>,
+    /// Revision of the managed source this runtime job was built from.
+    /// `None` for legacy jobs that predate managed sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_revision: Option<String>,
+    /// Runtime generation. Bumped when a completed one-time job receives
+    /// a new schedule, so history stays stable under the public job name.
+    #[serde(default)]
+    pub generation: u32,
 }
 
 impl Job {
