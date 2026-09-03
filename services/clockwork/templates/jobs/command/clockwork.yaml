@@ -1,0 +1,6 @@
+name: example-command
+jobs:
+  example-command:
+    schedule: "0 9 * * 1-5"
+    run: "printf 'replace with a reviewed local command\\n'"
+    paused: true

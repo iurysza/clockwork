@@ -1,0 +1,13 @@
+/target/
+/.claude/
+.DS_Store
+/.env
+/.env.*
+/*.log
+/*.tar.gz
+/*.zip
+/dist/
+/artifacts/
+node_modules/
+ui/.vite/
+ui/dist/

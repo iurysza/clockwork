@@ -1,0 +1,7 @@
+name: example-https-webhook
+jobs:
+  example-https-webhook:
+    schedule: "0 9 * * 1-5"
+    webhook: "https://example.invalid/review-before-enabling"
+    method: POST
+    paused: true
