@@ -57,7 +57,7 @@ Description=clockwork dispatcher tick
 
 [Service]
 Type=oneshot
-ExecStart={clockwork_path} _dispatch
+ExecStart={clockwork_path} _internal dispatch
 KillMode=process
 "
         );
@@ -137,12 +137,12 @@ impl Backend for SystemdBackend {
             healthy = false;
         }
         if self.service_path().exists() {
-            // Verify KillMode=process is present — without it, systemd kills spawned _exec
-            // child processes when the oneshot dispatch service exits.
+            // Keep spawned private executor processes alive after the
+            // one-shot dispatch service exits.
             let content = fs::read_to_string(self.service_path()).unwrap_or_default();
             if !content.contains("KillMode=process") {
                 messages.push(
-                    "Service file missing KillMode=process — spawned _exec processes may be \
+                    "Service file missing KillMode=process; spawned private executor processes may be \
                      killed prematurely. Run: clockwork repair"
                         .to_string(),
                 );

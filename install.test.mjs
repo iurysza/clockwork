@@ -43,6 +43,8 @@ describe("Clockwork Pi integration installer", () => {
   it("installs managed integration files without loading launchd or applying jobs", () => {
     const x = setup();
     installBinary(x.home);
+    const obsolete = path.join(x.home, ".local", "bin", "clockwork-jobs");
+    fs.symlinkSync(path.join(path.dirname(SCRIPT), "services", "clockwork", "clockwork-jobs.mjs"), obsolete);
     const result = x.run(["--apply"]);
     assert.strictEqual(result.status, 0, result.stderr);
     const jobs = path.join(x.home, ".agents", "clockwork", "jobs.d");
@@ -51,11 +53,22 @@ describe("Clockwork Pi integration installer", () => {
     assert.ok(fs.existsSync(jobs));
     assert.deepStrictEqual(fs.readdirSync(jobs), []);
     assert.ok(fs.existsSync(plist));
-    assert.ok(fs.lstatSync(path.join(x.home, ".local", "bin", "clockwork-jobs")).isSymbolicLink());
     assert.ok(fs.lstatSync(path.join(x.home, ".local", "bin", "clockwork-service")).isSymbolicLink());
+    assert.throws(() => fs.lstatSync(obsolete), { code: "ENOENT" });
     assert.strictEqual(fs.statSync(state).mode & 0o077, 0);
     assert.ok(!fs.existsSync(path.join(state, "jobs.json")));
     assert.ok(!fs.existsSync(path.join(state, "daemon.pid")));
+    fs.rmSync(x.tmp, { recursive: true, force: true });
+  });
+
+  it("preserves a user-owned command at the obsolete wrapper path", () => {
+    const x = setup();
+    installBinary(x.home);
+    const command = path.join(x.home, ".local", "bin", "clockwork-jobs");
+    fs.writeFileSync(command, "user owned\n");
+    const result = x.run(["--apply"]);
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.strictEqual(fs.readFileSync(command, "utf8"), "user owned\n");
     fs.rmSync(x.tmp, { recursive: true, force: true });
   });
 

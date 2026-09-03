@@ -12,8 +12,8 @@ use crate::engine::policy::{
     ActionExit, ExecutionAvailability, ExecutionDisposition, RunDecision, RunTimes,
     classify_outcome, complete_run, decide_run,
 };
-use crate::model::invocation::{Invocation, RunAttempt};
-use crate::model::run_record::{RunRecord, RunStatus, Trigger};
+use crate::model::invocation::{Invocation, InvocationSource, RunAttempt};
+use crate::model::run_record::{LastRun, RunRecord, RunStatus, Trigger};
 use crate::store::config::load_config;
 use crate::store::history;
 use crate::store::paths;
@@ -25,6 +25,9 @@ pub fn execute_invocation(invocation: &Invocation) -> Result<ExecutionDispositio
         .with_context(|| format!("Job not found: {}", invocation.job_id))?;
 
     let observed_at = Utc::now();
+    crate::job::inspect::StateInspector::new()
+        .verify_managed_runtime(&job, observed_at)
+        .map_err(anyhow::Error::from)?;
     if let RunDecision::Ignore(reason) = decide_run(
         &job,
         invocation,
@@ -72,29 +75,35 @@ fn execute_attempt(
         }
     };
 
-    let plan = {
+    let plan = complete_run(
+        attempt,
+        &outcome,
+        RunTimes {
+            started_at,
+            finished_at,
+        },
+        log_path,
+    );
+    {
+        // Record completion through the runtime's narrow scheduler API: it
+        // owns claim clearing, run counters, and one-shot completion.
         let _state_lock = FileLock::state()?;
-        let mut job_state = state::load_state()?;
-        let plan = complete_run(
-            job_state.jobs.get(&attempt.job_id),
-            attempt,
-            &outcome,
-            RunTimes {
-                started_at,
-                finished_at,
+        crate::job::runtime::FsRuntimeStore::complete_run(
+            &attempt.job_id,
+            &attempt.run_id,
+            attempt.recorded_for(),
+            matches!(&attempt.source, InvocationSource::Scheduled { .. }),
+            LastRun {
+                run_id: plan.record.run_id.clone(),
+                started_at: plan.record.started_at,
+                finished_at: plan.record.finished_at,
+                status: plan.record.status,
+                exit_code: plan.record.exit_code,
+                log_path: plan.record.log_path.clone(),
+                error_message: plan.record.error_message.clone(),
             },
-            log_path,
-        );
-        if let Some(updated_job) = &plan.job {
-            if job_state.jobs.contains_key(&attempt.job_id) {
-                job_state
-                    .jobs
-                    .insert(attempt.job_id.clone(), updated_job.clone());
-            }
-        }
-        state::save_state(&job_state)?;
-        plan
-    };
+        )?;
+    }
 
     history::append_record(&plan.record)?;
     if let Some(failure) = plan.failure {
@@ -156,7 +165,7 @@ fn append_failures_log(
         .and_then(|mut f| f.write_all(line.as_bytes()));
 }
 
-/// Spawn `clockwork _exec-fallback` as a detached subprocess after a failed run.
+/// Spawn `clockwork _internal exec-fallback` after a failed invocation.
 fn spawn_fallback(
     job_id: &str,
     run_id: &str,
@@ -177,13 +186,14 @@ fn spawn_fallback(
         |h| h.join(log_path).to_string_lossy().to_string(),
     );
 
-    // Spawn _exec-fallback as detached process
+    // Spawn the private fallback executor as a detached process
     let clockwork_bin =
         std::env::current_exe().context("could not determine clockwork binary path")?;
     let exit_code_str = exit_code.map_or_else(String::new, |c| c.to_string());
     let mut cmd = Command::new(clockwork_bin);
     cmd.args([
-        "_exec-fallback",
+        "_internal",
+        "exec-fallback",
         job_id,
         "--failed-run-id",
         run_id,
@@ -201,7 +211,7 @@ fn spawn_fallback(
     cmd.stderr(std::process::Stdio::null());
     detach_fallback_process(&mut cmd);
     cmd.spawn()
-        .with_context(|| format!("failed to spawn _exec-fallback for job {job_id}"))?;
+        .with_context(|| format!("failed to spawn _internal exec-fallback for job {job_id}"))?;
     Ok(())
 }
 
@@ -222,7 +232,7 @@ fn detach_fallback_process(cmd: &mut Command) {
 #[cfg(not(unix))]
 fn detach_fallback_process(_cmd: &mut Command) {}
 
-/// Execute a fallback command for a failed job. Called from the `_exec-fallback` hidden command.
+/// Execute a fallback command for a failed job. Called from `_internal exec-fallback`.
 pub fn exec_fallback(
     job_id: &str,
     failed_run_id: &str,

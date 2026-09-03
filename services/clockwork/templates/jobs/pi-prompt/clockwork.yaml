@@ -1,8 +1,7 @@
 name: example-pi-prompt
-jobs:
-  example-pi-prompt:
-    schedule: "0 9 * * 1-5"
-    agent: clockwork-pi-example-pi-prompt
-    prompt: "Replace with a reviewed prompt that has no unapproved external effect."
-    timeout: 3600
-    paused: true
+schedule: "0 9 * * 1-5"
+action:
+  prompt:
+    profile: clockwork-pi-example-pi-prompt
+    text: "Replace with a reviewed prompt that has no unapproved external effect."
+timeout: 3600

@@ -23,22 +23,24 @@ sh install.sh --version 0.1.0
 
 ## Add the Pi integration
 
-Pi jobs need extra local files: the Pi launcher, the managed-job helper, a job directory, an environment file, and a launchd plist. Install them only when you plan to schedule Pi work:
+Pi jobs need extra local files: the Pi launcher, a job directory, an environment file, and a launchd plist. Install them only when you plan to schedule Pi work:
 
 ```sh
 sh install.sh --with-pi
 ```
 
-This requires Node.js and Pi. It creates only managed files. It does not load launchd, start a daemon, apply jobs, or send an external request.
+This requires Node.js and Pi. It creates only managed files. It does not load launchd, start a daemon, create jobs, or send an external request.
 
-Use the installed commands to manage the integration:
+Inspect the native job commands and check the service with:
 
 ```sh
-clockwork-jobs check [job]
-clockwork-jobs plan [job]
-clockwork-jobs apply [job] --confirm <job|all> --no-input
-clockwork-service start|status|restart|stop|doctor|logs
+clockwork job --help
+clockwork-service status
 ```
+
+`clockwork-service` also supports `start`, `restart`, `stop`, `doctor`, and `logs`.
+
+Mutating job commands support `--dry-run`, `--yes`, `--if-revision`, and `--json`. Non-interactive callers preview with `--dry-run --json` and apply with `--yes --if-revision <revision>`.
 
 ## Build from source
 

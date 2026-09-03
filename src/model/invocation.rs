@@ -97,6 +97,6 @@ impl From<&Invocation> for RunAttempt {
 pub enum InvocationInputError {
     #[error("Missing --run-id for scheduled execution")]
     MissingScheduledRunId,
-    #[error("Fallback runs use the dedicated _exec-fallback command")]
+    #[error("Fallback runs use the dedicated _internal exec-fallback command")]
     FallbackIsNotPrimary,
 }

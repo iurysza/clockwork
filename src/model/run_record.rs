@@ -91,7 +91,7 @@ impl std::fmt::Display for Trigger {
 }
 
 /// Summary of the last run, stored inline in job state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LastRun {
     pub run_id: String,
     pub started_at: DateTime<Utc>,

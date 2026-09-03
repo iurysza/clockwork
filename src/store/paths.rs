@@ -56,14 +56,6 @@ pub fn update_check_file() -> Result<PathBuf> {
     Ok(clockwork_home()?.join("update-check.json"))
 }
 
-pub fn manifests_dir() -> Result<PathBuf> {
-    Ok(clockwork_home()?.join("manifests"))
-}
-
-pub fn manifest_state_file(manifest_name: &str) -> Result<PathBuf> {
-    Ok(manifests_dir()?.join(format!("{manifest_name}.json")))
-}
-
 /// Ensure the full directory hierarchy exists with secure permissions.
 pub fn ensure_dirs() -> Result<()> {
     let home = clockwork_home()?;
@@ -72,7 +64,6 @@ pub fn ensure_dirs() -> Result<()> {
         home.join("backups"),
         home.join("logs"),
         home.join("locks"),
-        home.join("manifests"),
     ] {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("failed to create directory: {}", dir.display()))?;
@@ -83,7 +74,7 @@ pub fn ensure_dirs() -> Result<()> {
 
 /// Set directory permissions to 0700 (owner-only access).
 #[cfg(unix)]
-fn set_dir_permissions(path: &std::path::Path) -> Result<()> {
+pub(crate) fn set_dir_permissions(path: &std::path::Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let perms = std::fs::Permissions::from_mode(0o700);
     std::fs::set_permissions(path, perms)

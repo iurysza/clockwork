@@ -26,7 +26,7 @@ pub struct JobListEntry {
     pub last_run_at: Option<String>,
     pub last_run_at_readable: Option<String>,
     pub consecutive_failures: u32,
-    /// Declarative manifest that owns this job (`clockwork up`), if any.
+    /// Owner recorded for jobs created through `clockwork job`, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub managed_by: Option<String>,
 }
@@ -82,7 +82,7 @@ pub struct JobDetail {
     pub on_failure: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub on_failure_shell: bool,
-    /// Declarative manifest that owns this job (`clockwork up`), if any.
+    /// Owner recorded for jobs created through `clockwork job`, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub managed_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -383,6 +383,8 @@ mod tests {
             completed_at: None,
             consecutive_failures: 0,
             managed_by: None,
+            source_revision: None,
+            generation: 0,
         }
     }
 

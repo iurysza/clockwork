@@ -66,7 +66,8 @@ impl LaunchdBackend {
     <key>ProgramArguments</key>
     <array>
         <string>{clockwork_path}</string>
-        <string>_dispatch</string>
+        <string>_internal</string>
+        <string>dispatch</string>
     </array>
     <key>StartInterval</key>
     <integer>60</integer>

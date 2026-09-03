@@ -210,8 +210,8 @@ fn check_systemd_killmode(findings: &mut Vec<Finding>) {
         findings.push(Finding {
             check: "systemd_killmode".to_string(),
             severity: Severity::Error,
-            message: "Service file missing KillMode=process — spawned _exec processes may be \
-                      killed prematurely (this was the cause of the silent 9-day failure bug)"
+            message: "Service file missing KillMode=process — spawned executor processes may \
+                      be killed prematurely (this was the cause of the silent 9-day failure bug)"
                 .to_string(),
             hint: Some("Run: clockwork repair".to_string()),
         });

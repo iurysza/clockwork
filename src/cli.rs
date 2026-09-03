@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
@@ -10,244 +10,35 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    /// Output as JSON (for supported commands)
+    /// Output as JSON where the command supports it
     #[arg(long, global = true)]
     pub json: bool,
 }
 
 #[derive(Subcommand)]
-#[allow(clippy::large_enum_variant)]
 pub enum Commands {
-    /// Add a new scheduled job
-    Add {
-        /// Schedule expression (cron, 'in Xm/h/d', 'every Xm/h/d', or ISO-8601)
-        schedule: String,
-
-        /// Command to run
-        #[arg(long)]
-        run: Option<String>,
-
-        /// Prompt text for an agent
-        #[arg(long)]
-        prompt: Option<String>,
-
-        /// Webhook URL to call
-        #[arg(long)]
-        webhook: Option<String>,
-
-        /// Job name
-        #[arg(long)]
-        name: Option<String>,
-
-        /// Tag (repeatable)
-        #[arg(long, action = clap::ArgAction::Append)]
-        tag: Vec<String>,
-
-        /// Timeout in seconds
-        #[arg(long)]
-        timeout: Option<u64>,
-
-        /// Working directory (run action only)
-        #[arg(long)]
-        workdir: Option<String>,
-
-        /// Agent name for prompt action
-        #[arg(long)]
-        agent: Option<String>,
-
-        /// Read command/prompt from stdin
-        #[arg(long)]
-        stdin: bool,
-
-        /// Use shell execution (/bin/sh -lc)
-        #[arg(long)]
-        shell: bool,
-
-        /// HTTP method for webhook (GET, POST, PUT, PATCH, DELETE)
-        #[arg(long)]
-        method: Option<String>,
-
-        /// HTTP header (repeatable, format: "Key: Value")
-        #[arg(long, action = clap::ArgAction::Append)]
-        header: Vec<String>,
-
-        /// Request body for webhook
-        #[arg(long)]
-        body: Option<String>,
-
-        /// Command to run if this job fails
-        #[arg(long)]
-        on_failure: Option<String>,
-
-        /// Use shell execution for the failure command
-        #[arg(long)]
-        on_failure_shell: bool,
+    /// Safely create, inspect, schedule, run, and remove managed jobs
+    Job {
+        #[command(subcommand)]
+        command: JobCommands,
     },
 
-    /// Apply a declarative manifest (clockwork.yaml), reconciling the job store to match
-    Up {
-        /// Path to the manifest file
-        #[arg(short = 'f', long, default_value = "clockwork.yaml")]
-        file: std::path::PathBuf,
-
-        /// Show what would change without applying anything
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Accept a moved manifest file (updates the recorded path)
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Remove the jobs a declarative manifest owns
-    Down {
-        /// Path to the manifest file
-        #[arg(short = 'f', long, default_value = "clockwork.yaml")]
-        file: std::path::PathBuf,
-
-        /// Target a manifest by name instead of by file (works after the yaml is gone)
-        #[arg(long, conflicts_with = "file")]
-        manifest: Option<String>,
-
-        /// Show what would be removed without removing anything
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Accept a moved manifest file (skips the recorded-path check)
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// List scheduled jobs
-    List {
-        /// Filter by status
-        #[arg(long)]
-        status: Option<String>,
-
-        /// Filter by tag
-        #[arg(long)]
-        tag: Option<String>,
-
-        /// Show all jobs including archived
-        #[arg(long, conflicts_with = "status")]
-        all: bool,
-    },
-
-    /// Show details for a specific job
-    Get {
-        /// Job ID or name
-        id: String,
-    },
-
-    /// Run a job immediately (manual trigger)
-    Run {
-        /// Job ID or name
-        id: String,
-    },
-
-    /// Edit an existing job's properties
-    Edit {
-        /// Job ID or name
-        id: String,
-
-        /// New name for the job
-        #[arg(long)]
-        name: Option<String>,
-
-        /// New prompt text (prompt jobs only)
-        #[arg(long)]
-        prompt: Option<String>,
-
-        /// Read new prompt from stdin (prompt jobs only)
-        #[arg(long)]
-        prompt_stdin: bool,
-
-        /// New command (run jobs only)
-        #[arg(long)]
-        run: Option<String>,
-
-        /// New agent name (prompt jobs only)
-        #[arg(long)]
-        agent: Option<String>,
-
-        /// New timeout in seconds
-        #[arg(long)]
-        timeout: Option<u64>,
-
-        /// New schedule expression
-        #[arg(long)]
-        schedule: Option<String>,
-    },
-
-    /// Remove a job
-    Rm {
-        /// Job ID or name
-        id: String,
-
-        /// Force removal without confirmation
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Pause a job's schedule
-    Pause {
-        /// Job ID or name
-        id: String,
-    },
-
-    /// Resume a paused job
-    Resume {
-        /// Job ID or name
-        id: String,
-    },
-
-    /// Restore an archived job back to completed status
-    Unarchive {
-        /// Job ID or name
-        id: String,
-    },
-
-    /// Skip the next N scheduled runs of a recurring job
-    Skip {
-        /// Job ID or name
-        id: String,
-
-        /// Number of runs to skip (default: 1)
-        #[arg(long, default_value = "1")]
-        times: u32,
-    },
-
-    /// View job logs
-    Logs {
-        /// Job ID or name
-        id: String,
-
-        /// Specific run ID
-        #[arg(long)]
-        run: Option<String>,
-
-        /// Number of lines to show (from end)
-        #[arg(long)]
-        lines: Option<usize>,
-    },
-
-    /// View run history
-    History {
-        /// Job ID (optional, show all if omitted)
-        id: Option<String>,
-
-        /// Maximum number of records
-        #[arg(long, default_value = "20")]
-        limit: usize,
-    },
-
-    /// Manage agent profiles
+    /// Manage execution-agent profiles
     Agent {
         #[command(subcommand)]
         command: AgentCommands,
     },
 
-    /// Detect AI coding agents and install clockwork skills for them
+    /// Read or set configuration
+    Config {
+        /// Config key
+        key: Option<String>,
+
+        /// Config value (set mode)
+        value: Option<String>,
+    },
+
+    /// Detect AI coding agents and install Clockwork skills for them
     Setup {
         /// Install for a specific agent (claude, codex, cursor, gemini, opencode)
         #[arg(long)]
@@ -270,23 +61,7 @@ pub enum Commands {
         list: bool,
     },
 
-    /// Read or set configuration
-    Config {
-        /// Config key
-        key: Option<String>,
-
-        /// Config value (set mode)
-        value: Option<String>,
-    },
-
-    /// Upgrade clockwork to the latest version
-    Upgrade {
-        /// Force upgrade even if already on latest version
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Repair backend and state
+    /// Repair backend and generated state
     Repair {
         /// Suppress informational output (only show errors)
         #[arg(long)]
@@ -296,7 +71,7 @@ pub enum Commands {
     /// Run self-diagnostics and report health issues
     Doctor,
 
-    /// (Re)generate the system scheduler backend files
+    /// (Re)generate system scheduler backend files
     SetupBackend {
         /// Backend to configure: "systemd" or "launchd"
         backend: String,
@@ -309,16 +84,214 @@ pub enum Commands {
         interval: Option<u64>,
     },
 
-    /// Internal: dispatch tick (hidden)
-    #[command(hide = true)]
-    #[command(name = "_dispatch")]
+    /// Upgrade Clockwork to the latest version
+    Upgrade {
+        /// Force upgrade even if already on latest version
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Private scheduler and executor process entrypoints
+    #[command(hide = true, name = "_internal")]
+    Internal {
+        #[command(subcommand)]
+        command: InternalCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum JobCommands {
+    /// Create a managed job in the disabled state
+    Create {
+        /// Managed job name
+        name: String,
+
+        #[command(flatten)]
+        definition: DefinitionArgs,
+
+        #[command(flatten)]
+        mutation: MutationArgs,
+    },
+
+    /// Update a managed job definition
+    Update {
+        /// Managed job name
+        name: String,
+
+        #[command(flatten)]
+        definition: DefinitionArgs,
+
+        #[command(flatten)]
+        mutation: MutationArgs,
+    },
+
+    /// Allow future scheduled runs
+    Enable {
+        /// Managed job name
+        name: String,
+
+        #[command(flatten)]
+        mutation: MutationArgs,
+    },
+
+    /// Prevent future scheduled runs
+    Disable {
+        /// Managed job name
+        name: String,
+
+        #[command(flatten)]
+        mutation: MutationArgs,
+    },
+
+    /// Delete an idle managed job and its source
+    Delete {
+        /// Managed job name
+        name: String,
+
+        #[command(flatten)]
+        mutation: MutationArgs,
+    },
+
+    /// Run an enabled, idle job now
+    Trigger {
+        /// Managed job name
+        name: String,
+
+        #[command(flatten)]
+        mutation: MutationArgs,
+    },
+
+    /// Validate one managed source, or every managed source
+    Validate {
+        /// Managed job name
+        name: Option<String>,
+    },
+
+    /// Show the combined source and runtime state
+    Status {
+        /// Managed job name
+        name: Option<String>,
+    },
+
+    /// List managed jobs
+    List,
+
+    /// Show run history for a managed job
+    History {
+        /// Managed job name
+        name: String,
+
+        /// Maximum number of records
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// Print a managed job's latest log, or a selected run log
+    Logs {
+        /// Managed job name
+        name: String,
+
+        /// Specific run ID
+        #[arg(long)]
+        run: Option<String>,
+
+        /// Number of lines from the end
+        #[arg(long)]
+        lines: Option<usize>,
+    },
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct DefinitionArgs {
+    /// Schedule expression (cron, "in Xm/h/d", "every Xm/h/d", or ISO-8601)
+    #[arg(long)]
+    pub schedule: Option<String>,
+
+    /// Local command action
+    #[arg(long, visible_alias = "run")]
+    pub command: Option<String>,
+
+    /// Prompt action text
+    #[arg(long)]
+    pub prompt: Option<String>,
+
+    /// HTTPS webhook action URL
+    #[arg(long)]
+    pub webhook: Option<String>,
+
+    /// Use shell execution for a command action
+    #[arg(long)]
+    pub shell: bool,
+
+    /// Working directory for a command action
+    #[arg(long)]
+    pub workdir: Option<String>,
+
+    /// Registered agent profile for a prompt action
+    #[arg(long)]
+    pub profile: Option<String>,
+
+    /// HTTP method for a webhook action
+    #[arg(long)]
+    pub method: Option<String>,
+
+    /// HTTP header for a webhook action (repeatable, "Key: Value")
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub header: Vec<String>,
+
+    /// Request body for a webhook action
+    #[arg(long)]
+    pub body: Option<String>,
+
+    /// Maximum action duration in seconds
+    #[arg(long)]
+    pub timeout: Option<u64>,
+
+    /// Tag (repeatable). When supplied to update, replaces all tags.
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub tag: Vec<String>,
+}
+
+impl DefinitionArgs {
+    pub fn has_changes(&self) -> bool {
+        self.schedule.is_some()
+            || self.command.is_some()
+            || self.prompt.is_some()
+            || self.webhook.is_some()
+            || self.shell
+            || self.workdir.is_some()
+            || self.profile.is_some()
+            || self.method.is_some()
+            || !self.header.is_empty()
+            || self.body.is_some()
+            || self.timeout.is_some()
+            || !self.tag.is_empty()
+    }
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct MutationArgs {
+    /// Validate and preview without changing state
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Skip interactive confirmation
+    #[arg(long)]
+    pub yes: bool,
+
+    /// Apply only to this source and runtime revision
+    #[arg(long)]
+    pub if_revision: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum InternalCommands {
+    /// Run one scheduler dispatch tick
     Dispatch,
 
-    /// Internal: execute a single job (hidden)
-    #[command(hide = true)]
-    #[command(name = "_exec")]
-    Exec {
-        /// Job ID
+    /// Execute one claimed or manual invocation
+    Execute {
+        /// Runtime job ID
         job_id: String,
 
         /// Scheduled-for timestamp (RFC-3339)
@@ -334,30 +307,28 @@ pub enum Commands {
         run_id: Option<String>,
     },
 
-    /// Internal: execute fallback for a failed job (hidden)
-    #[command(hide = true)]
-    #[command(name = "_exec-fallback")]
+    /// Execute a fallback action after a failed invocation
     ExecFallback {
-        /// Job ID
+        /// Runtime job ID
         job_id: String,
 
-        /// Run ID of the failed execution
+        /// Failed run ID
         #[arg(long)]
         failed_run_id: String,
 
-        /// Status of the failed run
+        /// Failed status
         #[arg(long)]
         failed_status: String,
 
-        /// Exit code of the failed run
+        /// Failed exit code
         #[arg(long, default_value = "")]
         failed_exit_code: String,
 
-        /// Absolute path to the failed run's log file
+        /// Absolute failed log path
         #[arg(long)]
         failed_log_path: String,
 
-        /// When the failed run was scheduled (RFC-3339)
+        /// Failed scheduled-for timestamp
         #[arg(long)]
         failed_scheduled_for: String,
     },

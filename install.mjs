@@ -80,6 +80,23 @@ function linkManaged(source, destination, releaseRoot) {
   fs.symlinkSync(source, destination);
 }
 
+function removeObsoleteManagedLink(destination, releaseRoot) {
+  let stat;
+  try {
+    stat = fs.lstatSync(destination);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  if (!stat.isSymbolicLink()) return;
+
+  const linked = path.resolve(path.dirname(destination), fs.readlinkSync(destination));
+  const checkoutTarget = path.join(SERVICE_DIR, "clockwork-jobs.mjs");
+  if (linked === checkoutTarget || linked.startsWith(`${releaseRoot}${path.sep}`)) {
+    fs.unlinkSync(destination);
+  }
+}
+
 function installIntegration(target) {
   if (!fs.existsSync(target.binary)) {
     throw new Error(`Clockwork binary missing: ${target.binary}. Install Clockwork before adding the Pi integration.`);
@@ -101,7 +118,7 @@ function installIntegration(target) {
   writeAtomic(target.plist, renderPlist(target), 0o644);
   const binDir = path.dirname(target.binary);
   const releaseRoot = path.join(process.env.XDG_DATA_HOME || path.join(target.home, ".local", "share"), "clockwork", "releases");
-  linkManaged(path.join(SERVICE_DIR, "clockwork-jobs.mjs"), path.join(binDir, "clockwork-jobs"), releaseRoot);
+  removeObsoleteManagedLink(path.join(binDir, "clockwork-jobs"), releaseRoot);
   linkManaged(path.join(SERVICE_DIR, "pi-launcher.mjs"), path.join(binDir, "clockwork-pi"), releaseRoot);
   linkManaged(path.join(SERVICE_DIR, "service.sh"), path.join(binDir, "clockwork-service"), releaseRoot);
 }
@@ -115,7 +132,6 @@ function doctor(target) {
       failed = true;
     } else console.log(`ok      ${label}`);
   };
-  check("Clockwork jobs syntax", process.execPath, ["--check", path.join(SERVICE_DIR, "clockwork-jobs.mjs")]);
   check("Clockwork Pi launcher syntax", process.execPath, ["--check", path.join(SERVICE_DIR, "pi-launcher.mjs")]);
   check("Clockwork service shell syntax", "bash", ["-n", path.join(SERVICE_DIR, "service.sh")]);
   check("Clockwork launchd runner syntax", "zsh", ["-n", path.join(SERVICE_DIR, "launchd-run.sh")]);
