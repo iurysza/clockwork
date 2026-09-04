@@ -100,6 +100,8 @@ pub struct ActionDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
@@ -123,17 +125,19 @@ impl ActionDetail {
                 command: Some(command.clone()),
                 shell: Some(*shell),
                 workdir: workdir.clone(),
+                cwd: None,
                 url: None,
                 method: None,
                 headers: None,
                 text: None,
                 agent: None,
             },
-            Action::Prompt { text, agent } => Self {
+            Action::Prompt { text, agent, cwd } => Self {
                 kind: "prompt".to_string(),
                 command: None,
                 shell: None,
                 workdir: None,
+                cwd: cwd.clone(),
                 url: None,
                 method: None,
                 headers: None,
@@ -155,6 +159,7 @@ impl ActionDetail {
                     command: None,
                     shell: None,
                     workdir: None,
+                    cwd: None,
                     url: Some(redact::redact_url(url)),
                     method: Some(method.to_string()),
                     headers: if redacted.is_empty() {

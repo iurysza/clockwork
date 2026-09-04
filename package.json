@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test services/clockwork/*.test.mjs install.test.mjs install-release.test.mjs"
+    "test": "node --test install.test.mjs install-release.test.mjs"
   }
 }

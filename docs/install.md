@@ -21,15 +21,24 @@ To install a specific version, pass it explicitly:
 sh install.sh --version 0.1.0
 ```
 
-## Add the Pi integration
+## Add the background service
 
-Pi jobs need extra local files: the Pi launcher, a job directory, an environment file, and a launchd plist. Install them only when you plan to schedule Pi work:
+The optional service adds a job directory, environment file, service helper, and launchd plist:
 
 ```sh
-sh install.sh --with-pi
+sh install.sh --with-service
 ```
 
-This requires Node.js and Pi. It creates only managed files. It does not load launchd, start a daemon, create jobs, or send an external request.
+This requires Node.js. It creates only managed files. It does not load launchd, start a daemon, create jobs, or run an action.
+
+Register prompt agents separately:
+
+```sh
+clockwork agent detect
+clockwork agent list
+```
+
+Detected Pi profiles run `pi --print --mode json`. Use `clockwork agent add` when a job needs fixed model, tool, approval, session, or cwd arguments.
 
 Inspect the native job commands and check the service with:
 
@@ -51,7 +60,7 @@ cargo build --locked --release
 install -m 755 target/release/clockwork "$HOME/.local/bin/clockwork"
 ```
 
-To test the Pi integration from the checkout, run:
+To test the service integration from the checkout, run:
 
 ```sh
 node install.mjs

@@ -13,24 +13,20 @@ use crate::store::config::load_config;
 use super::definition::{ActionKind, JobDefinition};
 use super::error::{JobError, NotFound};
 use super::name::JobName;
-use super::profile::{ProfileStore, desired_profile, managed_profile_name, profile_contract};
+use super::profile::{ProfileStore, profile_contract};
 use super::runtime::{RuntimeStore, VersionedRuntimeJob, runtime_revision};
 use super::source::{FsSourceStore, SourceStore, VersionedJobSource};
 use super::state::{Activation, JobView, ManagedJobState, StateRevision};
 
 /// Complete inspected state for one job: managed source, runtime job,
-/// profile directory, and the derived public state.
+/// agent profile config, and the derived public state.
 #[derive(Debug, Clone)]
 pub struct JobSnapshot {
     pub name: JobName,
     pub source: Option<VersionedJobSource>,
     pub runtime: Option<VersionedRuntimeJob>,
-    /// Companion launcher profile present without a source yet (interrupted
-    /// create). Planning predicts the written revision from these bytes.
-    pub pending_pi_profile: Option<super::profile::PiProfileSource>,
     pub agents: BTreeMap<String, AgentProfile>,
     pub default_agent: Option<String>,
-    pub managed_profile: AgentProfile,
     pub default_timeout_seconds: u64,
     pub allow_insecure_http: bool,
 }
@@ -38,32 +34,31 @@ pub struct JobSnapshot {
 impl JobSnapshot {
     pub fn revision(&self) -> StateRevision {
         StateRevision {
-            source: self
-                .source
-                .as_ref()
-                .map(|s| s.revision.clone())
-                .or_else(|| {
-                    self.pending_pi_profile
-                        .as_ref()
-                        .map(|p| super::source::combined_revision(&[], Some(p)))
-                }),
+            source: self.source.as_ref().map(|s| s.revision.clone()),
             runtime: self.runtime.as_ref().map(|r| runtime_revision(&r.job)),
             profile: self.profile_revision(),
         }
     }
 
-    /// Pin the resolved profile state a prompt job would execute with: the
-    /// referenced profile, the derived managed profile, or the default agent
-    /// resolution. Absence is pinned explicitly so a later install or removal
-    /// moves the revision.
+    /// Pin the resolved generic profile state. A profile change after preview
+    /// must move the optimistic revision.
     fn profile_revision(&self) -> Option<String> {
-        if self.source.is_none() && self.pending_pi_profile.is_some() {
-            let name = managed_profile_name(&self.name);
-            let bytes = serde_json::to_vec(&(&name, self.agents.get(&name), &self.managed_profile))
-                .expect("agent profiles are JSON serializable");
-            return Some(super::state::content_revision(&bytes));
+        self.definition()
+            .and_then(|definition| self.profile_revision_for(definition))
+    }
+
+    pub fn revision_for_definition(&self, definition: &JobDefinition) -> StateRevision {
+        StateRevision {
+            source: self.source.as_ref().map(|source| source.revision.clone()),
+            runtime: self
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime_revision(&runtime.job)),
+            profile: self.profile_revision_for(definition),
         }
-        let definition = self.definition()?;
+    }
+
+    fn profile_revision_for(&self, definition: &JobDefinition) -> Option<String> {
         let JobAction::Prompt(prompt) = &definition.action else {
             return None;
         };
@@ -74,12 +69,7 @@ impl JobSnapshot {
         else {
             return Some("rev_profile_unresolved".to_string());
         };
-        let desired = self
-            .source
-            .as_ref()
-            .filter(|source| source.pi_profile.is_some())
-            .map(|_| &self.managed_profile);
-        let bytes = serde_json::to_vec(&(&name, self.agents.get(&name), desired))
+        let bytes = serde_json::to_vec(&(&name, self.agents.get(&name)))
             .expect("agent profiles are JSON serializable");
         Some(super::state::content_revision(&bytes))
     }
@@ -133,20 +123,6 @@ impl JobSnapshot {
                     format!("managed source is no longer valid: {error}"),
                 )
             })?;
-        profile_contract(
-            &source.definition,
-            source.pi_profile.as_ref(),
-            &self.agents,
-            self.default_agent.as_deref(),
-            &self.managed_profile,
-        )
-        .map_err(|error| {
-            JobError::integrity(
-                Some(self.name.clone()),
-                format!("managed profile state is invalid: {error}"),
-            )
-        })?;
-
         let schedule =
             crate::schedule::parser::parse_schedule(&source.definition.schedule, job.created_at)
                 .map_err(|error| {
@@ -192,29 +168,17 @@ impl JobSnapshot {
             .source
             .as_ref()
             .expect("runtime validation requires a source");
-        let desired = profile_contract(
+        profile_contract(
             &source.definition,
-            source.pi_profile.as_ref(),
             &self.agents,
             self.default_agent.as_deref(),
-            &self.managed_profile,
         )
         .map_err(|error| {
             JobError::integrity(
                 Some(self.name.clone()),
-                format!("managed profile state is invalid: {error}"),
+                format!("agent profile state is invalid: {error}"),
             )
-        })?;
-        if let Some(desired) = desired {
-            let name = managed_profile_name(&self.name);
-            if self.agents.get(&name) != Some(&desired) {
-                return Err(JobError::integrity(
-                    Some(self.name.clone()),
-                    format!("managed profile '{name}' is not installed as defined"),
-                ));
-            }
-        }
-        Ok(())
+        })
     }
 
     /// Derive the public managed state, fail closed on contradiction.
@@ -222,8 +186,7 @@ impl JobSnapshot {
         self.derive_state_checked(now, true)
     }
 
-    /// Derive lifecycle state for a planned repair. Missing managed profiles
-    /// are allowed because create, update, and enable can reinstall them.
+    /// Derive lifecycle state for a planned repair.
     pub(crate) fn derive_plannable_state(
         &self,
         now: DateTime<Utc>,
@@ -386,19 +349,12 @@ impl StateInspector {
         })?;
         let profiles = self.profiles.snapshot()?;
         let source = self.sources.load(name)?;
-        let pending_pi_profile = if source.is_none() {
-            FsSourceStore::companion_profile(name)?
-        } else {
-            None
-        };
         Ok(JobSnapshot {
             name: name.clone(),
             source,
-            pending_pi_profile,
             runtime: self.runtime.snapshot(name)?,
             agents: profiles.agents.clone(),
             default_agent: profiles.default_agent.clone(),
-            managed_profile: desired_profile(name),
             default_timeout_seconds: config.default_timeout_seconds,
             allow_insecure_http: config.allow_insecure_http,
         })
@@ -428,19 +384,12 @@ impl StateInspector {
             .into_iter()
             .map(|name| {
                 let source = self.sources.load(&name)?;
-                let pending_pi_profile = if source.is_none() {
-                    FsSourceStore::companion_profile(&name)?
-                } else {
-                    None
-                };
                 let snapshot = JobSnapshot {
                     name: name.clone(),
                     source,
-                    pending_pi_profile,
                     runtime: self.runtime.snapshot(&name)?,
                     agents: profiles.agents.clone(),
                     default_agent: profiles.default_agent.clone(),
-                    managed_profile: desired_profile(&name),
                     default_timeout_seconds: config.default_timeout_seconds,
                     allow_insecure_http: config.allow_insecure_http,
                 };

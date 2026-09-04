@@ -21,6 +21,7 @@ fn test_path(bin_dir: &Path) -> String {
 #[test]
 fn agent_add_and_list() {
     let env = TestEnv::new();
+    let cwd = env.home();
 
     env.cmd()
         .args([
@@ -31,6 +32,8 @@ fn agent_add_and_list() {
             "/usr/bin/echo",
             "--arg",
             "AGENT:",
+            "--cwd",
+            cwd.to_str().unwrap(),
         ])
         .assert()
         .success()
@@ -40,7 +43,17 @@ fn agent_add_and_list() {
         .args(["agent", "list"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("test-agent"));
+        .stdout(predicate::str::contains("test-agent"))
+        .stdout(predicate::str::contains(cwd.to_str().unwrap()));
+
+    env.cmd()
+        .args(["agent", "list", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "\"cwd\": \"{}\"",
+            cwd.display()
+        )));
 }
 
 #[test]
@@ -181,6 +194,51 @@ fn agent_detect_single_agent() {
         .success()
         .stdout(predicate::str::contains("claude"))
         .stdout(predicate::str::contains("(default)"));
+}
+
+#[test]
+#[cfg(unix)]
+fn agent_detect_registers_pi_and_current_opencode_command() {
+    let env = TestEnv::new();
+    let bin_dir = tempfile::tempdir().unwrap();
+    create_fake_binary(bin_dir.path(), "pi");
+    create_fake_binary(bin_dir.path(), "opencode");
+
+    env.cmd()
+        .env("PATH", test_path(bin_dir.path()))
+        .args(["agent", "detect", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\": \"pi\""))
+        .stdout(predicate::str::contains("\"name\": \"opencode\""));
+
+    let output = env
+        .cmd()
+        .args(["agent", "list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let profiles: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let pi = profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|profile| profile["name"] == "pi")
+        .unwrap();
+    assert_eq!(pi["bin"], bin_dir.path().join("pi").to_str().unwrap());
+    assert_eq!(pi["args"], serde_json::json!(["--print", "--mode", "json"]));
+    assert_eq!(pi["cwd"], serde_json::Value::Null);
+    let opencode = profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|profile| profile["name"] == "opencode")
+        .unwrap();
+    assert_eq!(
+        opencode["bin"],
+        bin_dir.path().join("opencode").to_str().unwrap()
+    );
+    assert_eq!(opencode["args"], serde_json::json!(["run"]));
 }
 
 #[test]

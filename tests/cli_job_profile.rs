@@ -1,6 +1,5 @@
-//! Profile ownership coverage: fail-closed prompt profiles, optimistic
-//! revision pinning of profile state, coordinator-owned derived profiles,
-//! and complete managed-source removal.
+//! Generic agent-profile coverage: fail-closed resolution, cwd inheritance and
+//! override, fixed Pi arguments, optimistic revision pinning, and ownership.
 mod helpers;
 
 use std::fs;
@@ -41,19 +40,6 @@ fn apply_expect_error(env: &TestEnv, base: &[&str], revision: &str) -> Value {
     serde_json::from_slice(&output.stdout).expect("one JSON envelope")
 }
 
-fn write_pi_source(env: &TestEnv, name: &str, pi_profile: &str) {
-    let dir = env.jobs_dir().join(name);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("pi-profile.json"), pi_profile).unwrap();
-}
-
-fn valid_pi_profile(env: &TestEnv) -> String {
-    format!(
-        r#"{{"version":1,"cwd":"{}","model":"anthropic/claude-sonnet-4","thinking":"low","tools":["read"],"approveProjectFiles":false}}"#,
-        env.home().display()
-    )
-}
-
 fn agents(env: &TestEnv) -> Vec<Value> {
     let output = env
         .cmd()
@@ -64,54 +50,17 @@ fn agents(env: &TestEnv) -> Vec<Value> {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
-fn create_pi_job(env: &TestEnv, name: &str, pi_profile: &str) -> Value {
-    write_pi_source(env, name, pi_profile);
-    apply(
-        env,
-        &[
-            "job",
-            "create",
-            name,
-            "--schedule",
-            "every 1h",
-            "--prompt",
-            "do the thing",
-            "--profile",
-            &format!("clockwork-pi-{name}"),
-        ],
-    )
+fn add_cat_profile(env: &TestEnv, name: &str) {
+    env.cmd()
+        .args(["agent", "add", name, "--bin", "/bin/cat", "--prompt-stdin"])
+        .assert()
+        .success();
 }
 
 #[test]
-fn create_owns_the_derived_profile_and_delete_removes_it_with_the_source_directory() {
-    let env = TestEnv::new();
-    create_pi_job(&env, "pijob", &valid_pi_profile(&env));
-
-    let installed = agents(&env);
-    let derived = installed
-        .iter()
-        .find(|profile| profile["name"] == "clockwork-pi-pijob")
-        .expect("coordinator installs the derived profile");
-    assert_eq!(derived["args"], serde_json::json!(["--job", "pijob"]));
-    assert_eq!(derived["prompt_stdin"], true);
-    assert!(derived["bin"].as_str().unwrap().contains("clockwork-pi"));
-
-    apply(&env, &["job", "delete", "pijob"]);
-
-    let remaining = agents(&env);
-    assert!(
-        remaining
-            .iter()
-            .all(|profile| profile["name"] != "clockwork-pi-pijob")
-    );
-    assert!(!env.jobs_dir().join("pijob").exists());
-}
-
-#[test]
-fn referenced_profile_must_exist_and_delete_keeps_shared_profiles() {
+fn referenced_profile_must_exist_and_default_profile_resolves() {
     let env = TestEnv::new();
 
-    // Missing referenced profile fails closed with a recovery hint.
     let output = env
         .cmd()
         .args([
@@ -156,7 +105,6 @@ fn referenced_profile_must_exist_and_delete_keeps_shared_profiles() {
         .unwrap();
     assert!(!output.status.success());
     let error: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error["error"]["code"], "CW_INVALID_INPUT");
     assert!(
         error["error"]["message"]
             .as_str()
@@ -164,18 +112,7 @@ fn referenced_profile_must_exist_and_delete_keeps_shared_profiles() {
             .contains("configured default agent")
     );
 
-    // A shared registered profile is referenced, never owned.
-    env.cmd()
-        .args([
-            "agent",
-            "add",
-            "shared",
-            "--bin",
-            "/bin/cat",
-            "--prompt-stdin",
-        ])
-        .assert()
-        .success();
+    add_cat_profile(&env, "shared");
     env.cmd()
         .args(["agent", "default", "shared"])
         .assert()
@@ -192,12 +129,116 @@ fn referenced_profile_must_exist_and_delete_keeps_shared_profiles() {
             "use default",
         ],
     );
+    assert_eq!(
+        json(&env, &["job", "status", "default-job", "--json"])["state"]["type"],
+        "disabled"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn generic_pi_profile_forwards_fixed_args_and_applies_cwd_override() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = TestEnv::new();
+    let profile_cwd = env.home().join("profile-project");
+    let override_cwd = env.home().join("job-project");
+    fs::create_dir_all(&profile_cwd).unwrap();
+    fs::create_dir_all(&override_cwd).unwrap();
+
+    let agent = env.home().join("fake-pi.sh");
+    fs::write(
+        &agent,
+        "#!/bin/sh\nprintf 'cwd=%s\\n' \"$PWD\"\nprintf 'args='\nfor arg in \"$@\"; do printf '[%s]' \"$arg\"; done\nprintf '\\nprompt='\ncat\n",
+    )
+    .unwrap();
+    fs::set_permissions(&agent, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let session_dir = env.home().join(".local/state/clockwork/pi-sessions/daily");
+    env.cmd()
+        .args([
+            "agent",
+            "add",
+            "pi-daily",
+            "--bin",
+            agent.to_str().unwrap(),
+            "--cwd",
+            profile_cwd.to_str().unwrap(),
+            "--prompt-stdin",
+            "--arg=--print",
+            "--arg=--mode",
+            "--arg=json",
+            "--arg=--model",
+            "--arg=openai-codex/gpt-5.6-sol",
+            "--arg=--thinking",
+            "--arg=xhigh",
+            "--arg=--tools",
+            "--arg=read,bash,write",
+            "--arg=--approve",
+            "--arg=--session-id",
+            "--arg=clockwork-daily",
+            "--arg=--session-dir",
+            &format!("--arg={}", session_dir.display()),
+        ])
+        .assert()
+        .success();
+
+    let profile = agents(&env)
+        .into_iter()
+        .find(|profile| profile["name"] == "pi-daily")
+        .expect("generic Pi profile");
+    assert_eq!(profile["cwd"], profile_cwd.to_str().unwrap());
+
+    for (name, cwd) in [
+        ("profile-cwd", profile_cwd.as_path()),
+        ("override-cwd", override_cwd.as_path()),
+    ] {
+        let mut create = vec![
+            "job",
+            "create",
+            name,
+            "--schedule",
+            "every 1h",
+            "--prompt",
+            "private prompt",
+            "--profile",
+            "pi-daily",
+        ];
+        if name == "override-cwd" {
+            create.extend(["--cwd", cwd.to_str().unwrap()]);
+        }
+        apply(&env, &create);
+        apply(&env, &["job", "enable", name]);
+        apply(&env, &["job", "trigger", name]);
+
+        let log = json(&env, &["job", "logs", name, "--json"])["log"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let resolved_cwd = fs::canonicalize(cwd).unwrap();
+        assert!(log.contains(&format!("cwd={}", resolved_cwd.display())));
+        assert!(log.contains("[--model][openai-codex/gpt-5.6-sol]"));
+        assert!(log.contains("[--tools][read,bash,write]"));
+        assert!(log.contains("[--approve]"));
+        assert!(log.contains("[--session-id][clockwork-daily]"));
+        assert!(log.contains(&format!("[--session-dir][{}]", session_dir.display())));
+        assert!(log.contains("prompt=private prompt"));
+    }
+
+    let source = fs::read_to_string(env.jobs_dir().join("override-cwd/clockwork.yaml")).unwrap();
+    assert!(source.contains(&format!("cwd: {}", override_cwd.display())));
+}
+
+#[test]
+fn profile_change_after_preview_is_a_revision_conflict() {
+    let env = TestEnv::new();
+    add_cat_profile(&env, "shared");
     apply(
         &env,
         &[
             "job",
             "create",
-            "shared-job",
+            "profiled",
             "--schedule",
             "every 1h",
             "--prompt",
@@ -206,183 +247,13 @@ fn referenced_profile_must_exist_and_delete_keeps_shared_profiles() {
             "shared",
         ],
     );
-    apply(&env, &["job", "delete", "shared-job"]);
-    assert!(
-        agents(&env)
-            .iter()
-            .any(|profile| profile["name"] == "shared")
-    );
-}
-
-#[test]
-fn delete_keeps_a_derived_profile_used_by_another_job() {
-    let env = TestEnv::new();
-    create_pi_job(&env, "owner", &valid_pi_profile(&env));
-    apply(
-        &env,
-        &[
-            "job",
-            "create",
-            "borrower",
-            "--schedule",
-            "every 1h",
-            "--prompt",
-            "hi",
-            "--profile",
-            "clockwork-pi-owner",
-        ],
-    );
-
-    apply(&env, &["job", "delete", "owner"]);
-
-    assert!(
-        agents(&env)
-            .iter()
-            .any(|profile| profile["name"] == "clockwork-pi-owner")
-    );
-    assert!(env.jobs_dir().join("borrower/clockwork.yaml").exists());
-}
-
-#[test]
-fn malformed_companion_and_non_prompt_companion_fail_closed() {
-    let env = TestEnv::new();
-
-    write_pi_source(&env, "badpi", "{not json");
-    let output = env
-        .cmd()
-        .args([
-            "job",
-            "create",
-            "badpi",
-            "--schedule",
-            "every 1h",
-            "--prompt",
-            "do the thing",
-            "--profile",
-            "clockwork-pi-badpi",
-            "--dry-run",
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error["error"]["code"], "CW_INVALID_INPUT");
-    assert!(
-        error["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("pi-profile.json")
-    );
-
-    // A hand-written source with a malformed companion validates false.
-    let dir = env.jobs_dir().join("badpi");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join("clockwork.yaml"),
-        "name: badpi\nschedule: every 1h\naction:\n  prompt:\n    profile: clockwork-pi-badpi\n    text: do the thing\n",
-    )
-    .unwrap();
-    fs::write(dir.join("pi-profile.json"), "{not json").unwrap();
-
-    let output = env
-        .cmd()
-        .args(["job", "validate", "badpi", "--json"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["ok"], false);
-    assert_eq!(report["jobs"][0]["valid"], false);
-    assert!(
-        report["jobs"][0]["errors"][0]
-            .as_str()
-            .unwrap()
-            .contains("pi-profile.json")
-    );
-
-    // pi-profile.json next to a command action is rejected too.
-    write_pi_source(&env, "cmdjob", &valid_pi_profile(&env));
-    let output = env
-        .cmd()
-        .args([
-            "job",
-            "create",
-            "cmdjob",
-            "--schedule",
-            "every 1h",
-            "--command",
-            "echo hi",
-            "--dry-run",
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(
-        error["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("only allowed for prompt jobs")
-    );
-}
-
-#[test]
-fn unmanaged_derived_profile_collision_rejects_the_operation() {
-    let env = TestEnv::new();
-    env.cmd()
-        .args([
-            "agent",
-            "add",
-            "clockwork-pi-pijob",
-            "--bin",
-            "/bin/cat",
-            "--prompt-stdin",
-        ])
-        .assert()
-        .success();
-
-    write_pi_source(&env, "pijob", &valid_pi_profile(&env));
-    let output = env
-        .cmd()
-        .args([
-            "job",
-            "create",
-            "pijob",
-            "--schedule",
-            "every 1h",
-            "--prompt",
-            "do the thing",
-            "--profile",
-            "clockwork-pi-pijob",
-            "--dry-run",
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error["error"]["code"], "CW_INVALID_INPUT");
-    assert!(
-        error["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("not owned by job 'pijob'")
-    );
-}
-
-#[test]
-fn profile_change_after_preview_is_a_revision_conflict() {
-    let env = TestEnv::new();
-    create_pi_job(&env, "pijob", &valid_pi_profile(&env));
 
     let preview = json(
         &env,
         &[
             "job",
             "update",
-            "pijob",
+            "profiled",
             "--timeout",
             "42",
             "--dry-run",
@@ -391,85 +262,160 @@ fn profile_change_after_preview_is_a_revision_conflict() {
     );
     let revision = preview["revision"].as_str().unwrap().to_string();
 
-    // A profile change after preview must move the optimistic revision.
     env.cmd()
-        .args(["agent", "rm", "clockwork-pi-pijob"])
+        .args([
+            "agent",
+            "add",
+            "shared",
+            "--bin",
+            "/bin/cat",
+            "--arg=changed",
+            "--prompt-stdin",
+        ])
         .assert()
         .success();
 
     let error = apply_expect_error(
         &env,
-        &["job", "update", "pijob", "--timeout", "42"],
+        &["job", "update", "profiled", "--timeout", "42"],
         &revision,
     );
     assert_eq!(error["error"]["code"], "CW_REVISION_CONFLICT");
     assert_eq!(error["changed"], false);
 
-    // Nothing changed: the runtime still carries the old timeout. Public
-    // status also fails closed until the managed profile is repaired.
     let state: Value =
         serde_json::from_str(&fs::read_to_string(env.home().join("jobs.json")).unwrap()).unwrap();
-    assert_ne!(state["jobs"]["pijob"]["timeout_seconds"], 42);
-    let output = env
-        .cmd()
-        .args(["job", "status", "pijob", "--json"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error["error"]["code"], "CW_INTEGRITY_VIOLATION");
-
-    apply(&env, &["job", "enable", "pijob"]);
-    assert!(
-        agents(&env)
-            .iter()
-            .any(|profile| profile["name"] == "clockwork-pi-pijob")
-    );
-    let status = json(&env, &["job", "status", "pijob", "--json"]);
-    assert_eq!(status["state"]["type"], "scheduled");
+    assert_ne!(state["jobs"]["profiled"]["timeout_seconds"], 42);
 }
 
 #[test]
-fn companion_bytes_change_after_create_preview_is_a_revision_conflict() {
+fn create_preview_conflicts_when_target_profile_changes() {
     let env = TestEnv::new();
-    write_pi_source(&env, "pijob", &valid_pi_profile(&env));
+    add_cat_profile(&env, "target");
+    let create = [
+        "job",
+        "create",
+        "profiled",
+        "--schedule",
+        "every 1h",
+        "--prompt",
+        "hi",
+        "--profile",
+        "target",
+    ];
+    let mut preview_args = create.to_vec();
+    preview_args.extend(["--dry-run", "--json"]);
+    let preview = json(&env, &preview_args);
 
-    let preview = json(
-        &env,
-        &[
-            "job",
-            "create",
-            "pijob",
-            "--schedule",
-            "every 1h",
-            "--prompt",
-            "do the thing",
-            "--profile",
-            "clockwork-pi-pijob",
-            "--dry-run",
-            "--json",
-        ],
-    );
-    let revision = preview["revision"].as_str().unwrap().to_string();
+    env.cmd()
+        .args([
+            "agent",
+            "add",
+            "target",
+            "--bin",
+            "/bin/cat",
+            "--arg=changed",
+            "--prompt-stdin",
+        ])
+        .assert()
+        .success();
 
-    // Editing the companion after preview changes the source revision.
-    write_pi_source(&env, "pijob", &valid_pi_profile(&env).replace("low", "off"));
-
-    let error = apply_expect_error(
-        &env,
-        &[
-            "job",
-            "create",
-            "pijob",
-            "--schedule",
-            "every 1h",
-            "--prompt",
-            "do the thing",
-            "--profile",
-            "clockwork-pi-pijob",
-        ],
-        &revision,
-    );
+    let error = apply_expect_error(&env, &create, preview["revision"].as_str().unwrap());
     assert_eq!(error["error"]["code"], "CW_REVISION_CONFLICT");
     assert_eq!(error["changed"], false);
+    assert!(!env.jobs_dir().join("profiled/clockwork.yaml").exists());
+}
+
+#[test]
+fn deleting_a_job_never_deletes_its_generic_profile() {
+    let env = TestEnv::new();
+    add_cat_profile(&env, "per-job");
+    apply(
+        &env,
+        &[
+            "job",
+            "create",
+            "profiled",
+            "--schedule",
+            "every 1h",
+            "--prompt",
+            "hi",
+            "--profile",
+            "per-job",
+        ],
+    );
+    apply(&env, &["job", "delete", "profiled"]);
+
+    assert!(
+        agents(&env)
+            .iter()
+            .any(|profile| profile["name"] == "per-job")
+    );
+    assert!(!env.jobs_dir().join("profiled").exists());
+}
+
+#[test]
+fn job_can_be_deleted_after_its_profile_is_removed() {
+    let env = TestEnv::new();
+    add_cat_profile(&env, "temporary");
+    apply(
+        &env,
+        &[
+            "job",
+            "create",
+            "profiled",
+            "--schedule",
+            "every 1h",
+            "--prompt",
+            "hi",
+            "--profile",
+            "temporary",
+        ],
+    );
+    env.cmd()
+        .args(["agent", "rm", "temporary"])
+        .assert()
+        .success();
+
+    apply(&env, &["job", "delete", "profiled"]);
+    assert!(!env.jobs_dir().join("profiled").exists());
+}
+
+#[test]
+fn invalid_profile_and_job_cwd_fail_before_mutation() {
+    let env = TestEnv::new();
+    env.cmd()
+        .args([
+            "agent",
+            "add",
+            "bad-cwd",
+            "--bin",
+            "/bin/cat",
+            "--cwd",
+            "/definitely/not/a/clockwork-directory",
+        ])
+        .assert()
+        .failure();
+    assert!(agents(&env).is_empty());
+
+    add_cat_profile(&env, "valid");
+    env.cmd()
+        .args([
+            "job",
+            "create",
+            "bad-job-cwd",
+            "--schedule",
+            "every 1h",
+            "--prompt",
+            "hi",
+            "--profile",
+            "valid",
+            "--cwd",
+            "/definitely/not/a/clockwork-directory",
+            "--dry-run",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    assert!(!env.jobs_dir().join("bad-job-cwd/clockwork.yaml").exists());
 }

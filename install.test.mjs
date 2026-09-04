@@ -21,7 +21,7 @@ function installBinary(home) {
   fs.writeFileSync(binary, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 }
 
-describe("Clockwork Pi integration installer", () => {
+describe("Clockwork service integration installer", () => {
   it("keeps preview zero-write and does not start a service", () => {
     const x = setup();
     const result = x.run([]);
@@ -35,7 +35,7 @@ describe("Clockwork Pi integration installer", () => {
     const x = setup();
     const result = x.run(["--apply"]);
     assert.notStrictEqual(result.status, 0);
-    assert.match(result.stderr, /Install Clockwork before adding the Pi integration/);
+    assert.match(result.stderr, /Install Clockwork before adding the service integration/);
     assert.deepStrictEqual(fs.readdirSync(x.home), []);
     fs.rmSync(x.tmp, { recursive: true, force: true });
   });
@@ -44,7 +44,9 @@ describe("Clockwork Pi integration installer", () => {
     const x = setup();
     installBinary(x.home);
     const obsolete = path.join(x.home, ".local", "bin", "clockwork-jobs");
+    const obsoletePi = path.join(x.home, ".local", "bin", "clockwork-pi");
     fs.symlinkSync(path.join(path.dirname(SCRIPT), "services", "clockwork", "clockwork-jobs.mjs"), obsolete);
+    fs.symlinkSync(path.join(path.dirname(SCRIPT), "services", "clockwork", "pi-launcher.mjs"), obsoletePi);
     const result = x.run(["--apply"]);
     assert.strictEqual(result.status, 0, result.stderr);
     const jobs = path.join(x.home, ".agents", "clockwork", "jobs.d");
@@ -55,6 +57,7 @@ describe("Clockwork Pi integration installer", () => {
     assert.ok(fs.existsSync(plist));
     assert.ok(fs.lstatSync(path.join(x.home, ".local", "bin", "clockwork-service")).isSymbolicLink());
     assert.throws(() => fs.lstatSync(obsolete), { code: "ENOENT" });
+    assert.throws(() => fs.lstatSync(obsoletePi), { code: "ENOENT" });
     assert.strictEqual(fs.statSync(state).mode & 0o077, 0);
     assert.ok(!fs.existsSync(path.join(state, "jobs.json")));
     assert.ok(!fs.existsSync(path.join(state, "daemon.pid")));
@@ -72,11 +75,12 @@ describe("Clockwork Pi integration installer", () => {
     fs.rmSync(x.tmp, { recursive: true, force: true });
   });
 
-  it("runs doctor without writing files or loading launchd", () => {
+  it("runs doctor without writing files, loading launchd, or requiring the removed Pi launcher", () => {
     const x = setup();
     const result = x.run(["--doctor"]);
     assert.strictEqual(result.status, 0, result.stderr);
     assert.match(result.stdout, /Clockwork plist rendering/);
+    assert.doesNotMatch(fs.readFileSync(path.join(path.dirname(SCRIPT), "services", "clockwork", "service.sh"), "utf8"), /pi-launcher/);
     assert.deepStrictEqual(fs.readdirSync(x.home), []);
     fs.rmSync(x.tmp, { recursive: true, force: true });
   });

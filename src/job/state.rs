@@ -98,8 +98,8 @@ impl ManagedJobState {
 pub struct StateRevision {
     pub source: Option<String>,
     pub runtime: Option<String>,
-    /// Resolved referenced/managed profile state. A profile change after
-    /// preview must surface as `CW_REVISION_CONFLICT`, so the optimistic
+    /// Resolved referenced profile state. A profile change after preview
+    /// must surface as `CW_REVISION_CONFLICT`, so the optimistic
     /// revision pins it alongside source and runtime.
     pub profile: Option<String>,
 }

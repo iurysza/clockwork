@@ -10,9 +10,7 @@ use super::name::JobName;
 use super::plan::{
     Change, ExternalEffect, JobOperation, JobPlanner, PlannedChange, PlannedRuntimeDefinition,
 };
-use super::profile::{
-    ProfileMutation, ProfileStore, desired_profile, managed_profile_name, profile_contract,
-};
+use super::profile::profile_contract;
 use super::runtime::{FsRuntimeStore, RuntimeDefinition, RuntimeMutation, RuntimeStore};
 use super::source::{FsSourceStore, SourceStore};
 use super::state::{JobView, ManagedJobState, StateRevision, ValidationReport};
@@ -36,7 +34,6 @@ pub struct JobService {
     inspector: StateInspector,
     sources: FsSourceStore,
     runtime: FsRuntimeStore,
-    profiles: super::profile::FsProfileStore,
 }
 
 impl Default for JobService {
@@ -51,7 +48,6 @@ impl JobService {
             inspector: StateInspector::new(),
             sources: FsSourceStore,
             runtime: FsRuntimeStore,
-            profiles: super::profile::FsProfileStore,
         }
     }
 
@@ -139,12 +135,9 @@ impl JobService {
                             .map_err(|error| error.to_string());
                         let profile_check = profile_contract(
                             &source.definition,
-                            source.pi_profile.as_ref(),
                             &config.agents,
                             config.default_agent.as_deref(),
-                            &desired_profile(&job_name),
                         )
-                        .map(|_| ())
                         .map_err(|error| error.to_string());
                         definition_check.and(profile_check)
                     }
@@ -195,7 +188,8 @@ impl JobService {
         now: DateTime<Utc>,
     ) -> Result<PlannedChange, JobError> {
         let snapshot = self.inspector.snapshot(operation.name())?;
-        let actual = snapshot.revision().combined();
+        let planned = JobPlanner::plan(operation, &snapshot, now)?;
+        let actual = planned.revision.combined();
         if actual != expected_revision {
             return Err(JobError::RevisionConflict {
                 job: Some(operation.name().clone()),
@@ -203,7 +197,7 @@ impl JobService {
                 actual,
             });
         }
-        JobPlanner::plan(operation, &snapshot, now)
+        Ok(planned)
     }
 
     /// Execute a validated operation. When `expected_revision` is provided
@@ -223,8 +217,9 @@ impl JobService {
             // Reload under the lock: preview state may be stale.
             let snapshot = self.inspector.snapshot(operation.name())?;
 
+            let mut planned = JobPlanner::plan(operation, &snapshot, now)?;
             if let Some(expected) = expected_revision {
-                let actual = snapshot.revision().combined();
+                let actual = planned.revision.combined();
                 if actual != expected {
                     return Err(JobError::RevisionConflict {
                         job: Some(operation.name().clone()),
@@ -233,8 +228,6 @@ impl JobService {
                     });
                 }
             }
-
-            let mut planned = JobPlanner::plan(operation, &snapshot, now)?;
             if planned.is_noop() {
                 return Ok(JobResult {
                     operation: planned.operation,
@@ -423,28 +416,6 @@ impl JobService {
                         self.sources.remove_atomic(&planned.job, &expected)?;
                     }
                 }
-                Change::UpsertProfile => {
-                    // Idempotent: the coordinator owns the derived profile
-                    // and skips an identical installed profile.
-                    let name = managed_profile_name(&planned.job);
-                    let desired = snapshot.managed_profile.clone();
-                    if snapshot.agents.get(&name) != Some(&desired) {
-                        self.profiles.apply(ProfileMutation::Upsert {
-                            name,
-                            profile: desired,
-                        })?;
-                    }
-                }
-                Change::RemoveProfile => {
-                    // Retry-safe and reference-safe: remove only a profile
-                    // that no other managed source resolves to.
-                    let name = managed_profile_name(&planned.job);
-                    if snapshot.agents.contains_key(&name)
-                        && !self.profile_is_used_elsewhere(&name, &planned.job)
-                    {
-                        self.profiles.apply(ProfileMutation::Remove { name })?;
-                    }
-                }
                 Change::TriggerRun => {
                     return Err(JobError::RuntimeFailure {
                         message: "trigger execution must run after its durable claim".to_string(),
@@ -453,49 +424,6 @@ impl JobService {
             }
         }
         Ok(())
-    }
-
-    fn profile_is_used_elsewhere(&self, profile: &str, owner: &JobName) -> bool {
-        let default_agent = match self.profiles.snapshot() {
-            Ok(snapshot) => snapshot.default_agent,
-            Err(_) => return true,
-        };
-        let Ok(names) = FsSourceStore::names() else {
-            return true;
-        };
-        for name in names {
-            if &name == owner {
-                continue;
-            }
-            let source = match self.sources.load(&name) {
-                Ok(Some(source)) => source,
-                Ok(None) => continue,
-                Err(_) => return true,
-            };
-            if let super::definition::JobAction::Prompt(prompt) = source.definition.action {
-                let resolved = prompt.profile.as_deref().or(default_agent.as_deref());
-                if resolved == Some(profile) {
-                    return true;
-                }
-            }
-        }
-
-        let Ok(state) = crate::store::state::load_state() else {
-            return true;
-        };
-        state.jobs.iter().any(|(id, job)| {
-            let is_owner = id == owner.as_str() || job.name.as_deref() == Some(owner.as_str());
-            if is_owner {
-                return false;
-            }
-            match &job.action {
-                crate::model::action::Action::Prompt { agent, .. } => {
-                    agent.as_deref().or(default_agent.as_deref()) == Some(profile)
-                }
-                crate::model::action::Action::Run { .. }
-                | crate::model::action::Action::Webhook { .. } => false,
-            }
-        })
     }
 
     /// Preserve the difference between a planner rejection and a failed

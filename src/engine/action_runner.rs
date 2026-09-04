@@ -25,9 +25,13 @@ pub fn execute(job: &Job, log_file: std::fs::File) -> Result<ActionExit> {
             job.timeout_seconds,
             log_file,
         ),
-        Action::Prompt { text, agent } => {
-            execute_prompt_action(text, agent.as_deref(), job.timeout_seconds, log_file)
-        }
+        Action::Prompt { text, agent, cwd } => execute_prompt_action(
+            text,
+            agent.as_deref(),
+            cwd.as_deref(),
+            job.timeout_seconds,
+            log_file,
+        ),
         Action::Webhook {
             url,
             method,
@@ -86,6 +90,7 @@ fn execute_run_action(
 fn execute_prompt_action(
     prompt_text: &str,
     agent_name: Option<&str>,
+    cwd_override: Option<&str>,
     timeout_seconds: u64,
     log_file: std::fs::File,
 ) -> Result<ActionExit> {
@@ -107,6 +112,9 @@ fn execute_prompt_action(
 
     let mut command = Command::new(&profile.bin);
     command.args(&profile.args);
+    if let Some(directory) = cwd_override.or(profile.cwd.as_deref()) {
+        command.current_dir(crate::util::path::resolve_directory(directory)?);
+    }
 
     let stdout_file = log_file.try_clone()?;
     let stderr_file = log_file.try_clone()?;

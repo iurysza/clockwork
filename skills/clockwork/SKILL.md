@@ -10,7 +10,7 @@ Use `clockwork job` for every job change. Managed sources live at `~/.agents/clo
 
 ## Safe workflow
 
-1. Preview creation: `clockwork job create <job> --schedule <expr> (--command <cmd> | --prompt <text> --profile <name> | --webhook <url>) --dry-run --json`.
+1. Preview creation: `clockwork job create <job> --schedule <expr> (--command <cmd> | --prompt <text> --profile <name> [--cwd <dir>] | --webhook <url>) --dry-run --json`.
 2. Show the creation plan and get approval.
 3. Create the disabled job with the same definition flags plus `--yes --if-revision <revision>`.
 4. Preview enablement: `clockwork job enable <job> --dry-run --json`.
@@ -38,13 +38,13 @@ A completed one-time schedule is immutable within its runtime generation. To mov
 
 Command jobs use direct argv execution by default. Add `--shell` when the command needs shell built-ins, pipes, redirects, or substitutions. The job owner must make every external effect idempotent. Prefer a Pi prompt job when the action needs skills or several guarded steps.
 
-### Pi prompt
+### Agent prompt
 
-Pi prompt jobs reference a registered profile (`clockwork agent list`) or carry a `pi-profile.json` beside the source. Write the companion before previewing creation. With a companion profile, the action profile must be `clockwork-pi-<job>`. Clockwork installs and updates that derived profile, then removes it when no other job uses it. A missing referenced profile, a malformed companion, or a colliding unmanaged profile fails closed.
+Prompt jobs reference a registered profile from `clockwork agent list`. Run `clockwork agent detect` for standard profiles or `clockwork agent add` for a custom binary, fixed arguments, prompt transport, and cwd. A job-level `--cwd` overrides the profile cwd. Missing profiles and invalid working directories fail before mutation.
 
-The companion accepts only cwd, model, thinking, tools, and approveProjectFiles. The launcher derives profile `clockwork-pi-<job>` and stable session `clockwork-<job>`. Callers cannot choose raw Pi arguments or session IDs.
+For durable Pi work, create one generic profile per job. Pass model, thinking, tools, approval, `--session-id clockwork-<job>`, and `--session-dir ~/.local/state/clockwork/pi-sessions/<job>` as fixed `--arg` values. Clockwork invokes Pi directly. The job references this profile but does not own it.
 
-The durable session is stored under `~/.local/state/clockwork/pi-sessions/<job>/`. Scheduled Pi starts through launchd, so validate its runtime environment instead of relying on the interactive shell. Exit code 127 with `env: node: No such file or directory` means the launchd `PATH` is wrong.
+Scheduled agents start through launchd, so validate the runtime environment instead of relying on the interactive shell.
 
 ### HTTPS webhook
 
@@ -55,7 +55,7 @@ Webhooks must use HTTPS unless `allow_insecure_http` is explicitly enabled. Keep
 Do not treat one success signal as proof of the whole workflow.
 
 1. Scheduler: inspect the matching run in `clockwork job history <job> --json`.
-2. Agent: inspect the Pi session JSONL and the run log under `~/.local/state/clockwork/`.
+2. Agent: inspect the agent session, when used, and the run log under `~/.local/state/clockwork/`.
 3. External effect: inspect the job owner's sanitized receipt or provider message ID.
 4. Services: confirm one Clockwork daemon and that any paused dependency resumed.
 
@@ -70,7 +70,7 @@ clockwork job logs <job> --json
 services/clockwork/service.sh logs
 ```
 
-Removal is destructive. Preview with `clockwork job delete <job> --dry-run --json`, get approval, then apply with `--yes --if-revision <revision>`. Delete refuses while a run is in flight. It removes the runtime job, removes an unused owned profile, and removes the source directory.
+Removal is destructive. Preview with `clockwork job delete <job> --dry-run --json`, get approval, then apply with `--yes --if-revision <revision>`. Delete refuses while a run is in flight. It removes the runtime job and source directory. Remove any unneeded agent profile separately with `clockwork agent rm <name>`.
 
 ## Rollback
 

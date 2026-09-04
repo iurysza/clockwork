@@ -1,13 +1,13 @@
 # Managed Clockwork service
 
-This optional macOS integration schedules Pi jobs. The default Clockwork install does not add it because it requires Node.js, Pi, a job directory, and a launchd plist.
+This optional macOS integration runs Clockwork schedules in the background. The default Clockwork install adds only the binary.
 
 ## Install the integration
 
-After you install the Clockwork binary, opt in with:
+After installing Clockwork, opt in with:
 
 ```sh
-sh install.sh --with-pi
+sh install.sh --with-service
 ```
 
 For development from this checkout, run:
@@ -16,21 +16,21 @@ For development from this checkout, run:
 node install.mjs --apply
 ```
 
-The installer writes managed files only. It does not load launchd, start a daemon, create jobs, or run a job action.
+The installer writes managed files only. It does not load launchd, start a daemon, create jobs, register agents, or run an action.
 
 ## Files it manages
 
-- Job source: `~/.agents/clockwork/jobs.d/`
+- Job sources: `~/.agents/clockwork/jobs.d/`
 - Optional environment file: `~/.agents/clockwork/env`
 - Runtime state: `~/.local/state/clockwork/`
-- Commands: `clockwork-pi` and `clockwork-service` (jobs are managed by `clockwork job`)
+- Command: `clockwork-service`
 - launchd plist: `~/Library/LaunchAgents/dev.iurysouza.clockwork.plist`
 
-The installer never adopts, overwrites, or removes job definitions.
+The installer never changes job definitions or agent profiles.
 
 ## Start the service
 
-After you review your jobs, run one of these commands:
+After reviewing and enabling your jobs, run one of these commands:
 
 ```sh
 clockwork-service start
@@ -43,15 +43,23 @@ clockwork-service logs
 
 The service runs one foreground daemon. It sets `CLOCKWORK_BACKEND=none` and stores runtime state in `~/.local/state/clockwork/`.
 
-## Manage jobs
+## Manage jobs and agents
 
-Jobs are created disabled and enabled explicitly. For a managed per-job Pi profile, write `pi-profile.json` in the job directory before `create`:
+Register agents through the generic profile commands:
 
 ```sh
-clockwork job create <job> --schedule "0 9 * * 1-5" --prompt "..." --profile clockwork-pi-<job>
+clockwork agent detect
+clockwork agent add <name> --bin <path> [--cwd <dir>] [--arg <value>]...
+clockwork agent list
+```
+
+Jobs are created disabled and enabled separately:
+
+```sh
+clockwork job create <job> --schedule "0 9 * * 1-5" --prompt "..." --profile <name> [--cwd <dir>]
 clockwork job enable <job> --dry-run --json
 clockwork job enable <job> --yes --if-revision <revision>
 clockwork job status <job> --json
 ```
 
-A prompt job with a `pi-profile.json` companion owns the derived profile `clockwork-pi-<job>`. Create and update maintain it automatically. Delete removes it when no other job uses it. To change a completed one-time job, use `clockwork job update <job> --schedule <future-time>`; Clockwork creates a new disabled runtime generation.
+A job-level cwd overrides the profile cwd. Jobs reference profiles but never create, update, or delete them. To change a completed one-time job, run `clockwork job update <job> --schedule <future-time>`. Clockwork creates a new disabled runtime generation.

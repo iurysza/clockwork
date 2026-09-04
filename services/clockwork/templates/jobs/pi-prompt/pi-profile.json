@@ -1,8 +1,0 @@
-{
-  "version": 1,
-  "cwd": "~/path/to/project",
-  "model": "provider/model",
-  "thinking": "high",
-  "tools": ["read"],
-  "approveProjectFiles": false
-}
