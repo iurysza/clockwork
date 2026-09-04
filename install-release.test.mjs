@@ -72,18 +72,18 @@ describe("Clockwork release installer", () => {
     fs.rmSync(x.tmp, { recursive: true, force: true });
   });
 
-  it("installs Pi integration only with the explicit opt-in", () => {
+  it("installs service integration only with the explicit opt-in", () => {
     const x = setup();
-    const result = x.run(["--with-pi"]);
+    const result = x.run(["--with-service"]);
     assert.strictEqual(result.status, 0, result.stderr);
     assert.ok(fs.existsSync(path.join(x.home, ".agents", "clockwork", "jobs.d")));
-    assert.ok(fs.lstatSync(path.join(x.home, ".local", "bin", "clockwork-pi")).isSymbolicLink());
+    assert.ok(!fs.existsSync(path.join(x.home, ".local", "bin", "clockwork-pi")));
     assert.ok(fs.lstatSync(path.join(x.home, ".local", "bin", "clockwork-service")).isSymbolicLink());
     assert.ok(fs.existsSync(path.join(x.home, "Library", "LaunchAgents", "dev.iurysouza.clockwork.plist")));
     assert.ok(!fs.existsSync(path.join(x.home, ".local", "state", "clockwork", "jobs.json")));
-    const rerun = x.run(["--with-pi"]);
+    const rerun = x.run(["--with-service"]);
     assert.strictEqual(rerun.status, 0, rerun.stderr);
-    assert.ok(fs.existsSync(path.join(x.home, ".local", "bin", "clockwork-pi")));
+    assert.ok(fs.existsSync(path.join(x.home, ".local", "bin", "clockwork-service")));
     fs.rmSync(x.tmp, { recursive: true, force: true });
   });
 

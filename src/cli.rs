@@ -20,7 +20,7 @@ pub enum Commands {
     /// Safely create, inspect, schedule, run, and remove managed jobs
     Job {
         #[command(subcommand)]
-        command: JobCommands,
+        command: Box<JobCommands>,
     },
 
     /// Manage execution-agent profiles
@@ -40,7 +40,7 @@ pub enum Commands {
 
     /// Detect AI coding agents and install Clockwork skills for them
     Setup {
-        /// Install for a specific agent (claude, codex, cursor, gemini, opencode)
+        /// Install for a specific agent (claude, codex, cursor, gemini, opencode, pi)
         #[arg(long)]
         agent: Option<String>,
 
@@ -231,6 +231,10 @@ pub struct DefinitionArgs {
     #[arg(long)]
     pub profile: Option<String>,
 
+    /// Working directory override for a prompt action
+    #[arg(long)]
+    pub cwd: Option<String>,
+
     /// HTTP method for a webhook action
     #[arg(long)]
     pub method: Option<String>,
@@ -261,6 +265,7 @@ impl DefinitionArgs {
             || self.shell
             || self.workdir.is_some()
             || self.profile.is_some()
+            || self.cwd.is_some()
             || self.method.is_some()
             || !self.header.is_empty()
             || self.body.is_some()
@@ -352,6 +357,10 @@ pub enum AgentCommands {
         /// Pass prompt via stdin instead of argument
         #[arg(long)]
         prompt_stdin: bool,
+
+        /// Working directory for this agent profile
+        #[arg(long)]
+        cwd: Option<String>,
     },
 
     /// Remove an agent profile

@@ -80,7 +80,7 @@ function linkManaged(source, destination, releaseRoot) {
   fs.symlinkSync(source, destination);
 }
 
-function removeObsoleteManagedLink(destination, releaseRoot) {
+function removeObsoleteManagedLink(destination, releaseRoot, checkoutTarget) {
   let stat;
   try {
     stat = fs.lstatSync(destination);
@@ -91,7 +91,6 @@ function removeObsoleteManagedLink(destination, releaseRoot) {
   if (!stat.isSymbolicLink()) return;
 
   const linked = path.resolve(path.dirname(destination), fs.readlinkSync(destination));
-  const checkoutTarget = path.join(SERVICE_DIR, "clockwork-jobs.mjs");
   if (linked === checkoutTarget || linked.startsWith(`${releaseRoot}${path.sep}`)) {
     fs.unlinkSync(destination);
   }
@@ -99,7 +98,7 @@ function removeObsoleteManagedLink(destination, releaseRoot) {
 
 function installIntegration(target) {
   if (!fs.existsSync(target.binary)) {
-    throw new Error(`Clockwork binary missing: ${target.binary}. Install Clockwork before adding the Pi integration.`);
+    throw new Error(`Clockwork binary missing: ${target.binary}. Install Clockwork before adding the service integration.`);
   }
 
   fs.mkdirSync(target.configDir, { recursive: true, mode: 0o700 });
@@ -118,8 +117,16 @@ function installIntegration(target) {
   writeAtomic(target.plist, renderPlist(target), 0o644);
   const binDir = path.dirname(target.binary);
   const releaseRoot = path.join(process.env.XDG_DATA_HOME || path.join(target.home, ".local", "share"), "clockwork", "releases");
-  removeObsoleteManagedLink(path.join(binDir, "clockwork-jobs"), releaseRoot);
-  linkManaged(path.join(SERVICE_DIR, "pi-launcher.mjs"), path.join(binDir, "clockwork-pi"), releaseRoot);
+  removeObsoleteManagedLink(
+    path.join(binDir, "clockwork-jobs"),
+    releaseRoot,
+    path.join(SERVICE_DIR, "clockwork-jobs.mjs"),
+  );
+  removeObsoleteManagedLink(
+    path.join(binDir, "clockwork-pi"),
+    releaseRoot,
+    path.join(SERVICE_DIR, "pi-launcher.mjs"),
+  );
   linkManaged(path.join(SERVICE_DIR, "service.sh"), path.join(binDir, "clockwork-service"), releaseRoot);
 }
 
@@ -132,7 +139,6 @@ function doctor(target) {
       failed = true;
     } else console.log(`ok      ${label}`);
   };
-  check("Clockwork Pi launcher syntax", process.execPath, ["--check", path.join(SERVICE_DIR, "pi-launcher.mjs")]);
   check("Clockwork service shell syntax", "bash", ["-n", path.join(SERVICE_DIR, "service.sh")]);
   check("Clockwork launchd runner syntax", "zsh", ["-n", path.join(SERVICE_DIR, "launchd-run.sh")]);
   try { lintPlist(renderPlist(target)); console.log("ok      Clockwork plist rendering"); } catch { console.log("fail    Clockwork plist rendering"); failed = true; }
@@ -144,7 +150,7 @@ export function main(argv = process.argv.slice(2), home = os.homedir()) {
   const target = paths(home);
   if (options.doctor) return doctor(target);
 
-  console.log("Clockwork Pi integration");
+  console.log("Clockwork service integration");
   console.log(`state: ${target.stateDir}`);
   if (!options.apply) {
     console.log("preview only: no files, jobs, services, or external effects will change");
@@ -152,7 +158,7 @@ export function main(argv = process.argv.slice(2), home = os.homedir()) {
   }
 
   installIntegration(target);
-  console.log("installed Pi integration files only; launchd remains unloaded and jobs remain untouched");
+  console.log("installed service integration files only; launchd remains unloaded and jobs remain untouched");
   return 0;
 }
 

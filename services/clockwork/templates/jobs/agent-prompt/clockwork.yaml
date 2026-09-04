@@ -1,7 +1,8 @@
-name: example-pi-prompt
+name: example-agent-prompt
 schedule: "0 9 * * 1-5"
 action:
   prompt:
-    profile: clockwork-pi-example-pi-prompt
+    profile: example-agent
+    cwd: "~/path/to/project"
     text: "Replace with a reviewed prompt that has no unapproved external effect."
 timeout: 3600

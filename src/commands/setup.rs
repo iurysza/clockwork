@@ -12,8 +12,8 @@ const SKILL_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SKILL_MD: &str = include_str!("../../skills/clockwork/SKILL.md");
 const REFERENCE_MD: &str = include_str!("../../skills/clockwork/reference.md");
 
-/// The five known agent targets for skill installation.
-const KNOWN_AGENTS: &[&str] = &["claude", "codex", "cursor", "gemini", "opencode"];
+/// Known agent targets for skill installation.
+const KNOWN_AGENTS: &[&str] = &["claude", "codex", "cursor", "gemini", "opencode", "pi"];
 
 #[allow(clippy::fn_params_excessive_bools)]
 pub fn execute(
@@ -52,7 +52,7 @@ pub fn execute(
     } else {
         if results.is_empty() {
             println!("No supported agents detected.");
-            println!("Install one of: Claude Code, Codex, Cursor, Gemini CLI, or OpenCode.");
+            println!("Install one of: Claude Code, Codex, Cursor, Gemini CLI, OpenCode, or Pi.");
             println!("Or specify an agent directly: clockwork setup --agent claude");
             println!("Or install for all supported agents: clockwork setup --all");
         } else {
@@ -258,7 +258,7 @@ fn install_for_agent(agent: &str, home: &Path, force: bool, dry_run: bool) -> Sk
 ///
 /// The landscape converged on one Anthropic-style `SKILL.md` directory:
 /// - Claude Code reads `~/.claude/skills/`.
-/// - Codex, Gemini CLI, and opencode all read the shared `~/.agents/skills/`
+/// - Codex, Gemini CLI, `OpenCode`, and Pi read the shared `~/.agents/skills/`
 ///   path (Gemini gives it precedence over `~/.gemini/skills/`).
 /// - Cursor has no global skills dir; it reads `.cursor/skills/` per project,
 ///   so we install into the current working directory.
@@ -268,7 +268,7 @@ fn skill_target(agent: &str, home: &Path) -> (Vec<(&'static str, &'static str)>,
     let files = vec![("SKILL.md", SKILL_MD), ("reference.md", REFERENCE_MD)];
     let dir = match agent {
         "claude" => home.join(".claude/skills/clockwork"),
-        "codex" | "gemini" | "opencode" => home.join(".agents/skills/clockwork"),
+        "codex" | "gemini" | "opencode" | "pi" => home.join(".agents/skills/clockwork"),
         // Cursor reads skills per project — install into the current directory,
         // resolved to an absolute path so the report shows where it landed.
         "cursor" => std::env::current_dir()
@@ -282,7 +282,9 @@ fn skill_target(agent: &str, home: &Path) -> (Vec<(&'static str, &'static str)>,
 /// Check if an agent binary is available on `PATH`.
 fn is_agent_detected(agent: &str) -> bool {
     match agent {
-        "claude" | "codex" | "gemini" | "opencode" => crate::util::detect::is_binary_on_path(agent),
+        "claude" | "codex" | "gemini" | "opencode" | "pi" => {
+            crate::util::detect::is_binary_on_path(agent)
+        }
         "cursor" => cursor_detected(),
         _ => false,
     }
@@ -311,7 +313,7 @@ fn display_path(path: &Path, home: &Path) -> String {
 }
 
 fn print_post_install_note(agent: &str, path: Option<&str>, _home: &Path) {
-    // Claude, Codex, Gemini CLI, and opencode all auto-discover the native
+    // Claude, Codex, Gemini CLI, OpenCode, and Pi auto-discover the native
     // SKILL.md from their skills directory — no config edit, no note needed.
     // Cursor is the exception: it has no global skills dir, so the skill lands
     // in the current project and must be installed per project.

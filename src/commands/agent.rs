@@ -16,7 +16,8 @@ pub fn execute(command: &AgentCommands, json_output: bool) -> Result<()> {
             bin,
             arg,
             prompt_stdin,
-        } => add_agent(name, bin, arg, *prompt_stdin),
+            cwd,
+        } => add_agent(name, bin, arg, *prompt_stdin, cwd.as_deref()),
         AgentCommands::Rm { name } => remove_agent(name),
         AgentCommands::List => list_agents(json_output),
         AgentCommands::Default { name } => set_default(name),
@@ -24,7 +25,16 @@ pub fn execute(command: &AgentCommands, json_output: bool) -> Result<()> {
     }
 }
 
-fn add_agent(name: &str, bin: &str, args: &[String], prompt_stdin: bool) -> Result<()> {
+fn add_agent(
+    name: &str,
+    bin: &str,
+    args: &[String],
+    prompt_stdin: bool,
+    cwd: Option<&str>,
+) -> Result<()> {
+    if let Some(directory) = cwd {
+        crate::util::path::resolve_directory(directory)?;
+    }
     let _lock = FileLock::state()?;
     config::update_config(|c| {
         c.agents.insert(
@@ -33,6 +43,7 @@ fn add_agent(name: &str, bin: &str, args: &[String], prompt_stdin: bool) -> Resu
                 bin: bin.to_string(),
                 args: args.to_vec(),
                 prompt_stdin,
+                cwd: cwd.map(str::to_string),
             },
         );
         Ok(())
@@ -72,6 +83,7 @@ fn list_agents(json_output: bool) -> Result<()> {
                     "bin": profile.bin,
                     "args": redact::redact_cli_args(&profile.args),
                     "prompt_stdin": profile.prompt_stdin,
+                    "cwd": profile.cwd,
                     "is_default": cfg.default_agent.as_deref() == Some(name.as_str()),
                 })
             })
@@ -87,8 +99,12 @@ fn list_agents(json_output: bool) -> Result<()> {
             } else {
                 ""
             };
+            let cwd = profile
+                .cwd
+                .as_deref()
+                .map_or_else(String::new, |cwd| format!(" [cwd: {cwd}]"));
             println!(
-                "{name}{default_marker}: {} {}",
+                "{name}{default_marker}: {} {}{cwd}",
                 profile.bin,
                 redact::redact_cli_args(&profile.args).join(" ")
             );
@@ -309,7 +325,7 @@ fn print_detect_human(
     }
     if parts.is_empty() {
         println!("No agents detected.");
-        println!("Install one of: Claude Code, Codex, Gemini CLI, or OpenCode.");
+        println!("Install one of: Claude Code, Codex, Gemini CLI, OpenCode, or Pi.");
     } else {
         println!(
             "{} agent(s): {}.",

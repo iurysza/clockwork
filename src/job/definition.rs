@@ -87,6 +87,8 @@ pub struct CommandAction {
 pub struct PromptAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     pub text: String,
 }
 
@@ -138,6 +140,7 @@ impl JobAction {
                 Ok(Action::Prompt {
                     text: prompt.text.clone(),
                     agent: prompt.profile.clone(),
+                    cwd: prompt.cwd.clone(),
                 })
             }
             Self::Webhook(hook) => build_webhook_action_with_policy(

@@ -5,11 +5,9 @@ use anyhow::Context;
 use super::definition::JobDefinition;
 use super::error::JobError;
 use super::name::JobName;
-use super::profile::{PiProfileSource, validate_pi_profile};
 use super::state::content_revision;
 
 const SOURCE_FILE_NAME: &str = "clockwork.yaml";
-const PI_PROFILE_FILE_NAME: &str = "pi-profile.json";
 
 /// Managed job sources live at `~/.agents/clockwork/jobs.d/<name>/clockwork.yaml`,
 /// one directory per job, directory name == job name. `CLOCKWORK_JOBS_ROOT`
@@ -28,30 +26,11 @@ pub fn source_path(name: &JobName) -> Result<PathBuf, JobError> {
     Ok(jobs_dir()?.join(name.as_str()).join(SOURCE_FILE_NAME))
 }
 
-pub fn pi_profile_path(name: &JobName) -> Result<PathBuf, JobError> {
-    Ok(jobs_dir()?.join(name.as_str()).join(PI_PROFILE_FILE_NAME))
-}
-
-/// Revision over the complete managed source: the canonical YAML bytes plus
-/// the companion `pi-profile.json` bytes when present. A companion edit is
-/// a source change and must move the optimistic revision.
-pub fn combined_revision(yaml: &[u8], pi_profile: Option<&PiProfileSource>) -> String {
-    let mut bytes = yaml.to_vec();
-    if let Some(profile) = pi_profile {
-        bytes.extend_from_slice(b"\0pi-profile.json\0");
-        bytes.extend_from_slice(profile.raw.as_bytes());
-    }
-    content_revision(&bytes)
-}
-
-/// A parsed managed source plus its content revision. `pi_profile` carries
-/// the raw launcher profile when the source directory provides one; the
-/// planner validates it and the coordinator owns the derived runtime profile.
+/// A parsed managed source plus its content revision.
 #[derive(Debug, Clone)]
 pub struct VersionedJobSource {
     pub definition: JobDefinition,
     pub revision: String,
-    pub pi_profile: Option<PiProfileSource>,
 }
 
 /// Private managed-source storage. Only the application service calls this.
@@ -99,9 +78,7 @@ impl FsSourceStore {
                     message: format!("source entry name is not UTF-8: {}", entry.path().display()),
                 });
             };
-            if file_name.starts_with('.')
-                || matches!(file_name, SOURCE_FILE_NAME | PI_PROFILE_FILE_NAME)
-            {
+            if file_name.starts_with('.') || file_name == SOURCE_FILE_NAME {
                 continue;
             }
             return Err(JobError::SourceFailure {
@@ -159,24 +136,6 @@ impl FsSourceStore {
     /// Canonical source bytes used for both storage and revision
     /// calculation, so the planner can predict the written revision and a
     /// reload hashes the exact bytes that were written.
-    /// Read the companion launcher profile without requiring the source to
-    /// exist. Create planning needs this to predict the written revision and
-    /// to fail closed on a malformed companion.
-    pub fn companion_profile(name: &JobName) -> Result<Option<PiProfileSource>, JobError> {
-        Self::validate_directory(name)?;
-        let path = pi_profile_path(name)?;
-        match std::fs::read_to_string(&path) {
-            Ok(raw) => {
-                validate_pi_profile(&raw, true).map_err(JobError::invalid_input)?;
-                Ok(Some(PiProfileSource { raw }))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(JobError::SourceFailure {
-                message: format!("failed to read {}: {e}", path.display()),
-            }),
-        }
-    }
-
     pub fn serialize(definition: &JobDefinition) -> Result<Vec<u8>, JobError> {
         let raw = serde_norway::to_string(definition).map_err(|e| JobError::SourceFailure {
             message: format!("failed to serialize job definition: {e}"),
@@ -213,11 +172,9 @@ impl SourceStore for FsSourceStore {
                 ),
             ));
         }
-        let pi_profile = Self::companion_profile(name)?;
         Ok(Some(VersionedJobSource {
-            revision: combined_revision(raw.as_bytes(), pi_profile.as_ref()),
+            revision: content_revision(raw.as_bytes()),
             definition,
-            pi_profile,
         }))
     }
 
@@ -251,11 +208,7 @@ impl SourceStore for FsSourceStore {
         }
 
         let raw = Self::serialize(definition)?;
-        let companion = match &current {
-            Some(source) => source.pi_profile.clone(),
-            None => Self::companion_profile(&definition.name)?,
-        };
-        let revision = combined_revision(&raw, companion.as_ref());
+        let revision = content_revision(&raw);
 
         let dir = path.parent().ok_or_else(|| JobError::SourceFailure {
             message: format!("invalid source path {}", path.display()),
@@ -301,9 +254,6 @@ impl SourceStore for FsSourceStore {
                 actual: existing.revision.clone(),
             });
         }
-        // Remove the complete managed source directory, including the
-        // companion pi-profile.json. Leaving the companion behind would
-        // recreate a broken managed source on the next scan.
         let dir = jobs_dir()?.join(name.as_str());
         std::fs::remove_dir_all(&dir).map_err(|e| JobError::SourceFailure {
             message: format!("failed to remove {}: {e}", dir.display()),

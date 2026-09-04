@@ -310,6 +310,7 @@ fn apply_action_patch(
             };
             Ok(JobAction::Prompt(PromptAction {
                 profile: patch.profile.clone().or_else(|| previous.profile.clone()),
+                cwd: patch.cwd.clone().or_else(|| previous.cwd.clone()),
                 text: patch.prompt.clone().unwrap_or_default(),
             }))
         }
@@ -349,6 +350,7 @@ fn apply_action_patch(
                 reject_unrelated(patch, "prompt")?;
                 Ok(JobAction::Prompt(PromptAction {
                     profile: patch.profile.clone().or_else(|| previous.profile.clone()),
+                    cwd: patch.cwd.clone().or_else(|| previous.cwd.clone()),
                     text: previous.text.clone(),
                 }))
             }
@@ -440,6 +442,7 @@ fn new_definition(name: JobName, input: &DefinitionArgs) -> Result<JobDefinition
         reject_unrelated(input, "prompt")?;
         JobAction::Prompt(PromptAction {
             profile: input.profile.clone(),
+            cwd: input.cwd.clone(),
             text: text.clone(),
         })
     } else {
@@ -503,6 +506,7 @@ fn reject_unrelated(input: &DefinitionArgs, action: &str) -> Result<(), JobError
     let invalid = match action {
         "command" => {
             input.profile.is_some()
+                || input.cwd.is_some()
                 || input.method.is_some()
                 || !input.header.is_empty()
                 || input.body.is_some()
@@ -514,7 +518,9 @@ fn reject_unrelated(input: &DefinitionArgs, action: &str) -> Result<(), JobError
                 || !input.header.is_empty()
                 || input.body.is_some()
         }
-        "webhook" => input.shell || input.workdir.is_some() || input.profile.is_some(),
+        "webhook" => {
+            input.shell || input.workdir.is_some() || input.profile.is_some() || input.cwd.is_some()
+        }
         _ => false,
     };
     if invalid {
@@ -621,7 +627,6 @@ fn present_plan(plan: &PlannedChange, json: bool) {
             "current_state": plan.current_state.label(),
             "expected_state": plan.expected_state,
             "changes": plan.changes,
-            "profile": plan.profile,
             "schedule": plan.runtime.as_ref().map(|runtime| runtime.schedule_input.as_str()),
             "external_effect": plan.external_effect,
         });

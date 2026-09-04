@@ -10,7 +10,34 @@ Clockwork is a local scheduler for recurring agent work and local commands. Defi
 
 Each managed job lives in `~/.agents/clockwork/jobs.d/<job>/`. The directory name and the `name` field in its source must match.
 
-This weekday daily-brief job runs a Pi prompt at 09:00 from Monday to Friday:
+Register an agent profile before creating a prompt job. `clockwork agent detect` registers supported agents found on `PATH`, including Pi, Claude, Codex, Gemini, and OpenCode.
+
+A profile can also fix the command, arguments, and working directory for one job. This Pi profile uses a stable session:
+
+```sh
+clockwork agent add pi-daily-brief \
+  --bin "$(command -v pi)" \
+  --cwd "~/path/to/project" \
+  --prompt-stdin \
+  --arg=--print \
+  --arg=--mode \
+  --arg=json \
+  --arg=--model \
+  --arg=provider/model \
+  --arg=--thinking \
+  --arg=high \
+  --arg=--tools \
+  --arg=read,bash,write \
+  --arg=--approve \
+  --arg=--session-id \
+  --arg=clockwork-daily-brief \
+  --arg=--session-dir \
+  --arg="$HOME/.local/state/clockwork/pi-sessions/daily-brief"
+```
+
+Use `--no-approve` instead of `--approve` when the job must ignore project-local files. Arguments belong to the profile, so Claude, OpenCode, and custom agent commands use the same mechanism.
+
+This weekday daily-brief job runs the profile at 09:00 from Monday to Friday:
 
 ```yaml
 # ~/.agents/clockwork/jobs.d/daily-brief/clockwork.yaml
@@ -18,25 +45,13 @@ name: daily-brief # Must match the job directory.
 schedule: "0 9 * * 1-5" # Monday to Friday at 09:00.
 action:
   prompt:
-    profile: clockwork-pi-daily-brief # Managed Pi runner for this job.
-    text: "Write today's daily brief." # Prompt sent to Pi.
+    profile: pi-daily-brief # A profile from `clockwork agent list`.
+    cwd: "~/path/to/project" # Optional; overrides the profile cwd.
+    text: "Write today's daily brief."
 timeout: 3600 # Maximum run time in seconds.
 ```
 
-Definitions describe the schedule and action only. Activation is separate state owned by `clockwork job`; new jobs are disabled until you explicitly enable them.
-
-Pi jobs that use a managed per-job profile also need `pi-profile.json`. Create this file before you run `clockwork job create`. It fixes the working directory, model, thinking level, available tools, and project-file approval behaviour for each scheduled run.
-
-```json
-{
-  "version": 1,
-  "cwd": "~/path/to/project",
-  "model": "provider/model",
-  "thinking": "high",
-  "tools": ["read"],
-  "approveProjectFiles": false
-}
-```
+Definitions describe the schedule and action only. Activation is separate state owned by `clockwork job`; new jobs are disabled until you explicitly enable them. Jobs reference profiles but do not own them. Deleting a job leaves its profile in place.
 
 To run code instead, use a command action:
 
@@ -46,7 +61,7 @@ action:
     command: "scripts/refresh-index.sh" # Run a reviewed local command.
 ```
 
-See the [agent-job template](./services/clockwork/templates/jobs/pi-prompt/) and the [command-job template](./services/clockwork/templates/jobs/command/) for complete examples.
+See the [agent-job template](./services/clockwork/templates/jobs/agent-prompt/) and the [command-job template](./services/clockwork/templates/jobs/command/) for complete examples.
 
 ## Schedule useful work
 
@@ -85,7 +100,7 @@ flowchart LR
 
 ## Run work predictably
 
-- Schedule Pi prompts and local commands from the same job format.
+- Schedule agent prompts and local commands from the same job format.
 - Preview a job plan before you apply it.
 - Keep a history of completed, failed, and skipped runs.
 - Disable a job without losing its history.
@@ -103,20 +118,21 @@ sh install.sh
 
 The default install verifies the downloaded archive and writes only `~/.local/bin/clockwork`. It does not create jobs, configure an agent, write a launchd plist, or start a service.
 
-### Add the Pi integration
+### Add the background service
 
-Use the explicit opt-in only when you want Clockwork to schedule Pi jobs. It needs Node.js and Pi because it installs the Pi launcher, job directory, environment file, and an inactive launchd plist.
+Use the explicit opt-in when Clockwork should run schedules in the background. It installs the job directory, environment file, service helper, and an inactive launchd plist.
 
 ```sh
-sh install.sh --with-pi
+sh install.sh --with-service
 ```
 
-It still does not load launchd, create jobs, or send external requests.
+It does not load launchd, create jobs, or run actions.
 
-Create each job disabled, review the plan, and enable it explicitly:
+Register an agent profile, then create each job disabled. Review enablement separately:
 
 ```sh
-clockwork job create daily-brief --schedule "0 9 * * 1-5" --prompt "Write the daily brief." --profile clockwork-pi-daily-brief
+clockwork agent detect
+clockwork job create daily-brief --schedule "0 9 * * 1-5" --prompt "Write the daily brief." --profile pi --cwd "~/path/to/project"
 clockwork job enable daily-brief --dry-run
 clockwork job enable daily-brief --yes --if-revision <revision-from-dry-run>
 ```
@@ -132,7 +148,7 @@ clockwork-service start
 Every job is managed. Sources live at `~/.agents/clockwork/jobs.d/<name>/clockwork.yaml`; activation is stored separately and never edited by hand. New jobs are disabled by construction. `enable` is the only command that starts future scheduling.
 
 ```text
-clockwork job create <name> --schedule <expr> (--command <cmd> | --prompt <text> [--profile <name>] | --webhook <url>)
+clockwork job create <name> --schedule <expr> (--command <cmd> | --prompt <text> [--profile <name>] [--cwd <dir>] | --webhook <url>)
 clockwork job update <name> [definition flags]
 clockwork job enable <name>       # The only public activation path.
 clockwork job disable <name>
@@ -183,7 +199,7 @@ stateDiagram-v2
 
 ## Development
 
-For a source build, install the binary with Cargo. Add the Pi integration only when you need to test it:
+For a source build, install the binary with Cargo. Add the service integration only when you need to test it:
 
 ```sh
 cargo build --locked --release
@@ -202,7 +218,7 @@ Repository layout:
 
 ```text
 src/                    Rust scheduler and CLI
-services/clockwork/     Managed local service and Pi integration
+services/clockwork/     Managed local service integration
 skills/clockwork/       Agent-facing operating guidance
 docs/                   Installation and release references
 ```

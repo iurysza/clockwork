@@ -12,6 +12,8 @@ pub enum Action {
     Prompt {
         text: String,
         agent: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
     },
     Webhook {
         url: String,

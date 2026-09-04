@@ -5,7 +5,7 @@ All public jobs are managed. The source at `~/.agents/clockwork/jobs.d/<job>/clo
 ## Commands
 
 ```text
-clockwork job create <job> --schedule <expr> (--command <cmd> | --prompt <text> [--profile <name>] | --webhook <url>) [--timeout <s>] [--tag <t>]...
+clockwork job create <job> --schedule <expr> (--command <cmd> | --prompt <text> [--profile <name>] [--cwd <dir>] | --webhook <url>) [--timeout <s>] [--tag <t>]...
 clockwork job update <job> [definition flags]
 clockwork job enable <job>
 clockwork job disable <job>
@@ -27,7 +27,7 @@ Every mutating command validates the complete operation before mutation and supp
 --json                 Stable machine-readable output
 ```
 
-Non-interactive flow: run with `--dry-run --json`, record `revision`, then repeat with `--yes --if-revision <revision>`. For a relative one-time schedule such as `in 4h`, replace it with the preview's absolute `schedule` value when you apply. The command revalidates everything; a stale revision is a `CW_REVISION_CONFLICT` and changes nothing. The revision covers the managed source (including `pi-profile.json` bytes), the runtime job, and the resolved referenced profile.
+Non-interactive flow: run with `--dry-run --json`, record `revision`, then repeat with `--yes --if-revision <revision>`. For a relative one-time schedule such as `in 4h`, replace it with the preview's absolute `schedule` value when you apply. The command revalidates everything; a stale revision is a `CW_REVISION_CONFLICT` and changes nothing. The revision covers the managed source, runtime job, and resolved referenced profile.
 
 `create` always produces a disabled job. `enable` is the only public activation path and requires a future `next_run`. `trigger` requires an enabled, idle job and never acts as an automatic fallback. `update` and `delete` refuse to cross an in-flight run (`CW_RUN_IN_FLIGHT`).
 
@@ -40,14 +40,44 @@ name: daily-brief
 schedule: "0 9 * * 1-5"
 action:
   prompt:
-    profile: clockwork-pi-daily-brief
+    profile: pi-daily-brief
+    cwd: "~/path/to/project"
     text: "Write today's daily brief."
 timeout: 3600
 ```
 
 The directory name and the `name` field must match. The definition has no activation field; do not add `paused` or `enabled`.
 
-A Pi prompt job uses its named profile or the configured default agent. It may add `pi-profile.json` beside the source. Its `profile` must then be `clockwork-pi-<job>`. Clockwork owns that derived profile: create and update install it, and delete removes it when no other job uses it. A missing referenced profile, malformed companion, or unmanaged profile collision fails closed. A command job runs direct arguments unless `shell: true` is set in the source. A webhook job must use HTTPS.
+A prompt job uses its named profile or the configured default agent. A profile may define a cwd. The prompt action may override it. A missing profile or invalid effective cwd fails closed. Jobs never own profiles, so deletion leaves profiles unchanged. A command job runs direct arguments unless `shell: true` is set in the source. A webhook job must use HTTPS.
+
+## Agent profiles
+
+Detect standard agents with `clockwork agent detect`. It registers Pi, Claude, Codex, Gemini, and OpenCode when their binaries are on `PATH`. OpenCode runs through `opencode run`.
+
+Use `clockwork agent add` for fixed settings:
+
+```sh
+clockwork agent add pi-daily-brief \
+  --bin "$(command -v pi)" \
+  --cwd "~/path/to/project" \
+  --prompt-stdin \
+  --arg=--print \
+  --arg=--mode \
+  --arg=json \
+  --arg=--model \
+  --arg=provider/model \
+  --arg=--thinking \
+  --arg=high \
+  --arg=--tools \
+  --arg=read,bash,write \
+  --arg=--approve \
+  --arg=--session-id \
+  --arg=clockwork-daily-brief \
+  --arg=--session-dir \
+  --arg="$HOME/.local/state/clockwork/pi-sessions/daily-brief"
+```
+
+Use one profile per job when Pi needs a stable durable session. Use `--no-approve` instead of `--approve` when Pi must ignore project-local files. Other agents use the same `--bin`, `--arg`, `--prompt-stdin`, and `--cwd` fields with their own CLI flags.
 
 ## One-time jobs
 

@@ -14,9 +14,10 @@ pub struct KnownAgent {
 impl KnownAgent {
     pub fn to_profile(&self) -> AgentProfile {
         AgentProfile {
-            bin: self.bin.to_string(),
+            bin: binary_on_path(self.bin).unwrap_or_else(|| self.bin.to_string()),
             args: self.args.iter().map(|s| (*s).to_string()).collect(),
             prompt_stdin: self.prompt_stdin,
+            cwd: None,
         }
     }
 }
@@ -47,16 +48,32 @@ pub const KNOWN_CLI_AGENTS: &[KnownAgent] = &[
     KnownAgent {
         name: "opencode",
         bin: "opencode",
-        args: &["-p"],
+        args: &["run"],
         prompt_stdin: false,
         description: "OpenCode",
     },
+    KnownAgent {
+        name: "pi",
+        bin: "pi",
+        args: &["--print", "--mode", "json"],
+        prompt_stdin: false,
+        description: "Pi Coding Agent",
+    },
 ];
+
+/// Resolve a binary on `PATH`. Profiles keep the absolute path so they also
+/// work under launchd's restricted environment.
+pub fn binary_on_path(bin: &str) -> Option<String> {
+    let output = Command::new("which").arg(bin).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?;
+    let path = path.trim();
+    (!path.is_empty()).then(|| path.to_string())
+}
 
 /// Check if a binary is available on `PATH`.
 pub fn is_binary_on_path(bin: &str) -> bool {
-    Command::new("which")
-        .arg(bin)
-        .output()
-        .is_ok_and(|o| o.status.success())
+    binary_on_path(bin).is_some()
 }

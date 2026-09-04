@@ -227,7 +227,7 @@ fn format_action_detail(action: &Action, lines: &mut Vec<String>) {
                 lines.push(format!("Workdir: {dir}"));
             }
         }
-        Action::Prompt { text, agent } => {
+        Action::Prompt { text, agent, cwd } => {
             if text.contains('\n') {
                 lines.push("Prompt:".to_string());
                 for line in text.lines() {
@@ -238,6 +238,9 @@ fn format_action_detail(action: &Action, lines: &mut Vec<String>) {
             }
             if let Some(agent_name) = agent {
                 lines.push(format!("Agent: {agent_name}"));
+            }
+            if let Some(directory) = cwd {
+                lines.push(format!("Cwd: {directory}"));
             }
         }
         Action::Webhook {

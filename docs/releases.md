@@ -37,4 +37,4 @@ cargo build --locked --release
 npm test
 ```
 
-The release workflow also checks that each archive contains the binary and the optional Pi integration files. The installer verifies the matching archive against `sha256.sum` before it writes the binary.
+The release workflow also checks that each archive contains the binary and optional service files. The installer verifies the matching archive against `sha256.sum` before it writes the binary.

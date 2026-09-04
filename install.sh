@@ -2,23 +2,23 @@
 set -eu
 
 REPOSITORY="iurysza/clockwork"
-WITH_PI=0
+WITH_SERVICE=0
 REQUESTED_VERSION="latest"
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--version VERSION] [--with-pi]
+Usage: install.sh [--version VERSION] [--with-service]
 
 Install the latest Clockwork binary for macOS.
 
 Options:
   --version VERSION  Install an exact release version, such as 0.1.0.
-  --with-pi          Also install the optional Pi and launchd integration.
+  --with-service     Also install the optional launchd service integration.
   -h, --help         Show this help.
 
 The default install only adds ~/.local/bin/clockwork. It does not create jobs,
-install agent helpers, or start a service. --with-pi writes Pi helper files and
-a launchd plist, but still does not load launchd or apply jobs.
+install helpers, or start a service. --with-service writes the service helper
+and launchd plist, but still does not load launchd or apply jobs.
 EOF
 }
 
@@ -34,8 +34,8 @@ while [ "$#" -gt 0 ]; do
       REQUESTED_VERSION=$2
       shift 2
       ;;
-    --with-pi)
-      WITH_PI=1
+    --with-service)
+      WITH_SERVICE=1
       shift
       ;;
     -h|--help)
@@ -58,8 +58,8 @@ esac
 for command in awk curl install shasum tar; do
   command -v "$command" >/dev/null 2>&1 || fail "required command missing: $command"
 done
-if [ "$WITH_PI" -eq 1 ]; then
-  command -v node >/dev/null 2>&1 || fail "--with-pi requires Node.js"
+if [ "$WITH_SERVICE" -eq 1 ]; then
+  command -v node >/dev/null 2>&1 || fail "--with-service requires Node.js"
 fi
 
 case "$REQUESTED_VERSION" in
@@ -100,10 +100,10 @@ install -m 755 "$BINARY" "$TEMPORARY_BINARY"
 mv -f "$TEMPORARY_BINARY" "$BIN_DIR/clockwork"
 printf '%s\n' "Installed Clockwork v$VERSION to $BIN_DIR/clockwork"
 
-if [ "$WITH_PI" -eq 1 ]; then
+if [ "$WITH_SERVICE" -eq 1 ]; then
   BUNDLE_ROOT=$(dirname "$BINARY")
-  [ -f "$BUNDLE_ROOT/install.mjs" ] || fail "release archive does not contain the Pi integration installer"
-  [ -d "$BUNDLE_ROOT/services/clockwork" ] || fail "release archive does not contain the Pi integration files"
+  [ -f "$BUNDLE_ROOT/install.mjs" ] || fail "release archive does not contain the service integration installer"
+  [ -d "$BUNDLE_ROOT/services/clockwork" ] || fail "release archive does not contain the service integration files"
 
   RELEASES_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/clockwork/releases"
   BUNDLE_DIR="$RELEASES_DIR/v$VERSION"
