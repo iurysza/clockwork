@@ -2,7 +2,7 @@
 
 Clockwork publishes prebuilt macOS archives through GitHub Releases. `cargo-dist` creates the archives and checksums. Release Please controls versions, tags, and release notes.
 
-## Normal releases
+## Publish a release
 
 1. Merge Conventional Commit changes into `main`.
 2. Release Please opens or updates a release PR.
@@ -10,13 +10,9 @@ Clockwork publishes prebuilt macOS archives through GitHub Releases. `cargo-dist
 4. Release Please creates the `vX.Y.Z` tag and publishes the GitHub Release.
 5. The Release workflow checks out that tag, builds both macOS archives, and uploads the archives, checksums, source tarball, and `install.sh`.
 
-The Release workflow uses Rust 1.96.1 to run cargo-dist. Cargo-dist builds Clockwork with the repository's pinned Rust 1.85.0 toolchain.
+The [Release workflow](../.github/workflows/release.yml) installs cargo-dist with Rust 1.96.1 and builds Clockwork with the Rust 1.85.0 toolchain pinned in `rust-toolchain.toml`.
 
-Do not create tags or GitHub Releases manually after the bootstrap release.
-
-## Bootstrap v0.1.0
-
-The published `v0.1.0` tag establishes the initial release baseline. `.release-please-manifest.json` records that version, so future versions follow Conventional Commit messages without a `release-as` override.
+Let Release Please create tags and GitHub Releases. It tracks the current version in [`.release-please-manifest.json`](../.release-please-manifest.json).
 
 ## Versioning
 
@@ -25,9 +21,9 @@ The published `v0.1.0` tag establishes the initial release baseline. `.release-p
 - `feat!:` or a breaking-change footer creates a minor release while Clockwork is below 1.0.
 - `docs:`, `ci:`, `chore:`, and pure `refactor:` commits do not release.
 
-## Release checks
+## Check before merging
 
-Before merging a release PR, Verify must pass:
+The [Verify workflow](../.github/workflows/verify.yml) must pass before you merge a release PR:
 
 ```sh
 cargo fmt --check

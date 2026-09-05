@@ -1,8 +1,8 @@
 name: example-agent-prompt
-schedule: "0 9 * * 1-5"
+schedule: "0 9 * * MON-FRI"
 action:
   prompt:
     profile: example-agent
     cwd: "~/path/to/project"
-    text: "Replace with a reviewed prompt that has no unapproved external effect."
+    text: "Read this project's notes and write today's brief to daily-brief.md."
 timeout: 3600

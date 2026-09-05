@@ -12,8 +12,7 @@ use super::name::JobName;
 use super::profile::profile_contract;
 use super::state::{ManagedJobState, StateRevision};
 
-/// Typed public operations. Built only by the CLI parser — never from
-/// storage-level mutation requests.
+/// Job operations requested by the CLI, separate from storage mutations.
 #[derive(Debug, Clone)]
 pub enum JobOperation {
     Create(CreateJob),
@@ -83,8 +82,8 @@ impl std::fmt::Display for Change {
     }
 }
 
-/// Classification of effects outside clockwork's own state. Previews name
-/// the action type only — never prompt text, webhook data, or secrets.
+/// Whether a plan permits future runs or starts an action immediately.
+/// Previews include the action type but omit commands, prompts, and webhook data.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExternalEffect {
@@ -98,8 +97,7 @@ pub enum ExternalEffect {
     },
 }
 
-/// The runtime definition payload, calculated by the planner (schedule
-/// parsed against the injected clock) and handed to the coordinator.
+/// Runtime definition prepared by the planner using the caller's timestamp.
 #[derive(Debug, Clone)]
 pub struct PlannedRuntimeDefinition {
     pub schedule_input: String,
@@ -137,9 +135,8 @@ impl PlannedChange {
     }
 }
 
-/// Pure functional core: operation + inspected snapshot in, planned change
-/// or typed error out. No files, clocks, environment, or process state are
-/// read here — the caller injects `now`.
+/// Plan an operation from a snapshot and the caller's timestamp.
+/// Returns ordered changes or a typed error without reading or writing state.
 pub struct JobPlanner;
 
 impl JobPlanner {

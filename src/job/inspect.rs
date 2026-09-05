@@ -40,8 +40,7 @@ impl JobSnapshot {
         }
     }
 
-    /// Pin the resolved generic profile state. A profile change after preview
-    /// must move the optimistic revision.
+    /// Include the resolved profile in the revision so edits invalidate a preview.
     fn profile_revision(&self) -> Option<String> {
         self.definition()
             .and_then(|definition| self.profile_revision_for(definition))
@@ -181,7 +180,7 @@ impl JobSnapshot {
         })
     }
 
-    /// Derive the public managed state, fail closed on contradiction.
+    /// Derive the public state or reject contradictory stored data.
     pub fn derive_state(&self, now: DateTime<Utc>) -> Result<ManagedJobState, JobError> {
         self.derive_state_checked(now, true)
     }
@@ -302,8 +301,7 @@ impl JobSnapshot {
     }
 }
 
-/// Imperative shell: reads sources, runtime state, and profile config and
-/// assembles snapshots. No policy lives here — the planner owns that.
+/// Read sources, runtime jobs, and profiles into snapshots for the planner.
 pub struct StateInspector {
     sources: FsSourceStore,
     runtime: super::runtime::FsRuntimeStore,

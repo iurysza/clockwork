@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "clockwork",
     version,
-    about = "Secure and reliable scheduler CLI for commands, prompts, and webhooks"
+    about = "Schedule agent prompts, local commands, and HTTPS webhooks"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -17,13 +17,13 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Safely create, inspect, schedule, run, and remove managed jobs
+    /// Create, inspect, enable, run, and remove jobs
     Job {
         #[command(subcommand)]
         command: Box<JobCommands>,
     },
 
-    /// Manage execution-agent profiles
+    /// Manage agent commands and their fixed arguments
     Agent {
         #[command(subcommand)]
         command: AgentCommands,
@@ -71,7 +71,7 @@ pub enum Commands {
     /// Run self-diagnostics and report health issues
     Doctor,
 
-    /// (Re)generate system scheduler backend files
+    /// Install and enable the system scheduler timer
     SetupBackend {
         /// Backend to configure: "systemd" or "launchd"
         backend: String,
@@ -203,7 +203,7 @@ pub enum JobCommands {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DefinitionArgs {
-    /// Schedule expression (cron, "in Xm/h/d", "every Xm/h/d", or ISO-8601)
+    /// Schedule: cron, "in 4h", "every 10s", or a future RFC-3339 timestamp
     #[arg(long)]
     pub schedule: Option<String>,
 
@@ -284,7 +284,7 @@ pub struct MutationArgs {
     #[arg(long)]
     pub yes: bool,
 
-    /// Apply only to this source and runtime revision
+    /// Apply only to this source, runtime, and referenced profile revision
     #[arg(long)]
     pub if_revision: Option<String>,
 }

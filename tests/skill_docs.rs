@@ -1,11 +1,5 @@
-//! Drift guards for the canonical agent skill (`skills/clockwork/`).
-//!
-//! Two invariants that silently break a skill in production, locked here so CI
-//! catches them:
-//!   1. Every `clockwork <command>` the skill documents must still exist in the
-//!      CLI — a renamed or removed command fails the build.
-//!   2. An installed `SKILL.md` must keep its YAML frontmatter at byte 0, with
-//!      `name` and `description` parseable — the native loaders read it there.
+//! Check documented skill commands and installed skill metadata.
+//! The YAML frontmatter must start at byte zero for agent skill loaders.
 
 mod helpers;
 
@@ -130,9 +124,7 @@ fn setup_installs_skill_with_frontmatter_at_byte_zero() {
 
 #[test]
 fn setup_all_installs_every_supported_agent() {
-    // `--all` must install for every supported agent, detected or not — the
-    // docs promise it and the flag name implies it. Cursor installs into the
-    // current directory, so run from an isolated CWD to avoid polluting.
+    // Cursor installs into the current directory. Keep that path isolated.
     let env = TestEnv::new();
     let home = env.home();
     let cwd = tempfile::tempdir().expect("failed to make cwd");
@@ -144,7 +136,7 @@ fn setup_all_installs_every_supported_agent() {
         .assert()
         .success();
 
-    // Claude → ~/.claude, the shared trio → ~/.agents, cursor → project CWD.
+    // Check the Claude, shared, and project-local destinations.
     assert!(
         home.join(".claude/skills/clockwork/SKILL.md").exists(),
         "claude skill missing"
@@ -163,9 +155,7 @@ fn setup_all_installs_every_supported_agent() {
 
 #[test]
 fn setup_json_is_a_single_document() {
-    // `--json` must emit exactly ONE JSON document so it is parseable by jq /
-    // serde. (It used to print the skills array and then a separate agents
-    // object — two concatenated top-level values that broke every consumer.)
+    // Setup must combine skill installation and agent detection in one JSON value.
     let env = TestEnv::new();
     let home = env.home();
     let cwd = tempfile::tempdir().expect("failed to make cwd");
@@ -178,8 +168,7 @@ fn setup_json_is_a_single_document() {
         .output()
         .expect("failed to run setup --json");
 
-    // serde_json::from_slice rejects trailing data, so a clean parse is proof
-    // the output is a single document — it would fail on two concatenated ones.
+    // from_slice rejects trailing data, including a second JSON value.
     let doc: serde_json::Value = serde_json::from_slice(&output.stdout)
         .expect("setup --json must be exactly one JSON document");
     assert!(

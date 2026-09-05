@@ -10,8 +10,7 @@ use super::error::JobError;
 use super::name::JobName;
 use super::state::content_revision;
 
-/// Definition payload the runtime job is built from. Carries everything the
-/// runtime needs and nothing from the public CLI surface.
+/// Validated definition used to build a runtime job.
 #[derive(Debug, Clone)]
 pub struct RuntimeDefinition {
     pub name: JobName,
@@ -35,8 +34,8 @@ pub fn runtime_revision(job: &Job) -> String {
     content_revision(&bytes)
 }
 
-/// Crate-private runtime mutations. The public parser cannot construct this —
-/// only the application service and the scheduler drive it.
+/// Runtime changes used by the application service and scheduler.
+/// These operations have no public CLI entrypoint.
 pub(crate) enum RuntimeMutation {
     CreateDisabled(RuntimeDefinition),
     UpdateDefinition(RuntimeDefinition),
@@ -62,9 +61,7 @@ pub(crate) enum RuntimeMutation {
 /// hold the state lock across `apply`.
 pub(crate) trait RuntimeStore {
     fn snapshot(&self, name: &JobName) -> Result<Option<VersionedRuntimeJob>, JobError>;
-    // One lock-scoped transaction: existence handling, the optimistic
-    // revision check, and every mutation arm in sequence. Splitting it
-    // would scatter the atomicity story.
+    /// Apply one mutation while the caller holds the state lock.
     #[allow(clippy::too_many_lines)]
     fn apply(
         &self,
@@ -101,9 +98,7 @@ impl RuntimeStore for FsRuntimeStore {
         )
     }
 
-    // One lock-scoped transaction: existence handling, the optimistic
-    // revision check, and every mutation arm in sequence. Splitting it
-    // would scatter the atomicity story.
+    // Check the revision and apply the mutation under the caller's state lock.
     #[allow(clippy::too_many_lines)]
     fn apply(
         &self,

@@ -296,9 +296,8 @@ pub struct CompletionPlan {
 }
 
 /// Build the history record and fallback request for a finished attempt.
-/// Runtime bookkeeping (claim clearing, counters, one-shot completion) is
-/// owned by the runtime store's `CompleteRun` mutation — this policy only
-/// classifies the outcome.
+/// The runtime store's `CompleteRun` mutation clears the claim, updates counters,
+/// and marks finished one-time jobs as completed.
 pub fn complete_run(
     attempt: &RunAttempt,
     outcome: &RunOutcome,

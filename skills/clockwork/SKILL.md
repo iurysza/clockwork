@@ -1,77 +1,68 @@
 ---
 name: clockwork
-description: Schedule recurring commands or agent runs.
+description: Schedule recurring or one-time commands, agent prompts, and HTTPS webhooks.
 metadata:
   category: agent-workspace
 ---
 # Clockwork
 
-Use `clockwork job` for every job change. Managed sources live at `~/.agents/clockwork/jobs.d/<job>/clockwork.yaml` and describe the schedule and action only, never activation. Runtime state, history, logs, locks, receipts, profiles, and Pi sessions live under `~/.local/state/clockwork/`. Never edit runtime state as job configuration.
+Use `clockwork job` for job changes. New jobs are disabled. Creation and enablement need separate approval.
 
-## Safe workflow
+Job definitions live at `~/.agents/clockwork/jobs.d/<job>/clockwork.yaml`. Runtime state, profiles, history, and logs live under `~/.local/state/clockwork/`. `CLOCKWORK_JOBS_ROOT` and `CLOCKWORK_HOME` override those locations. Never edit runtime files as job configuration.
 
-1. Preview creation: `clockwork job create <job> --schedule <expr> (--command <cmd> | --prompt <text> --profile <name> [--cwd <dir>] | --webhook <url>) --dry-run --json`.
-2. Show the creation plan and get approval.
-3. Create the disabled job with the same definition flags plus `--yes --if-revision <revision>`.
-4. Preview enablement: `clockwork job enable <job> --dry-run --json`.
-5. Show the enablement plan and get separate approval.
-6. Enable the job: `clockwork job enable <job> --yes --if-revision <revision>`.
-7. Verify with `clockwork job status <job> --json`. An enabled job must report `scheduled` with a future `next_run`.
+Read [reference.md](reference.md) for command flags, profiles, and scheduling details.
 
-Use the revision from the matching dry run. For a relative one-time schedule such as `in 4h`, apply the absolute `schedule` value from the preview. A stale revision changes nothing.
+## Preview, approve, apply
 
-Treat `scheduled` with a past or null `next_run` and no run history as blocked. Disable the job. Do not trigger a manual run until you confirm that no run or external effect is in flight.
+1. Inspect existing jobs and profiles with `clockwork job list --json` and `clockwork agent list --json`.
+2. Preview creation with `clockwork job create <job> --schedule <expr> --command <cmd> --dry-run --json`. For other actions, use `--prompt <text> --profile <name>` or `--webhook <url>` instead of `--command`.
+3. Show the plan and get approval.
+4. Repeat the definition flags with `--yes --if-revision <revision>` to create the disabled job.
+5. Preview enablement with `clockwork job enable <job> --dry-run --json` and get separate approval.
+6. Enable with `clockwork job enable <job> --yes --if-revision <revision>`.
+7. Check `clockwork job status <job> --json`. A job waiting for its next run reports `state.type: scheduled` and a future `state.next_run`. If it is already running or completed, inspect that run instead.
 
-`trigger` is the only immediate-effect command and requires an enabled, idle job. Update and delete refuse to cross a run that is in flight.
+Use the revision from the matching preview. For `in 4h` or another relative one-time schedule, use the preview's absolute `schedule` value when applying. A stale revision changes nothing. Review a fresh plan before retrying.
+
+If status reports an integrity error or inconsistent scheduling data, stop and inspect. Do not trigger a manual run as a workaround. Confirm that no action or external request is in flight before changing scheduling.
+
+## Choose the action
+
+Command jobs execute directly by default. Add `--shell` for shell built-ins, pipes, redirects, or substitutions. Use an absolute `--workdir` for project scripts.
+
+Prompt jobs require a registered profile. Use `clockwork agent detect` for standard profiles or `clockwork agent add` for a custom command. Review detected arguments because some allow unattended tool execution. A job's `--cwd` overrides the profile's working directory. Clockwork passes agent arguments unchanged and does not manage agent sessions.
+
+For background jobs, check the service environment rather than relying on the interactive shell. The optional macOS service reads `~/.agents/clockwork/env` and sets its own `PATH`.
+
+Webhooks require HTTPS unless `allow_insecure_http` is enabled. Headers and bodies are literal stored values, not environment references. Use a command that reads credentials at run time for authenticated requests.
 
 ## One-time jobs
 
-A completed one-time schedule is immutable within its runtime generation. To move it, update with a new future schedule: Clockwork replaces the generation, starts it disabled, and keeps the public name and history stable.
+Create or update with the final future time, then review enablement. A completed one-time job needs a new future schedule before it can run again. Updating that schedule creates a disabled runtime generation and preserves the name and history.
 
-- Create or update with the final future time, then enable explicitly.
-- Before starting the daemon, require the exact future `next_run` from status.
-- After success, require `completed` with a successful last run.
+`completed` includes failure and timeout. Check `state.last_run.status` or history for `success` before reporting success.
 
-## Actions
+## Check the actual result
 
-### Command
+A successful CLI operation is not proof that the action succeeded or that a provider delivered its result.
 
-Command jobs use direct argv execution by default. Add `--shell` when the command needs shell built-ins, pipes, redirects, or substitutions. The job owner must make every external effect idempotent. Prefer a Pi prompt job when the action needs skills or several guarded steps.
+1. Inspect the matching run in `clockwork job history <job> --json`.
+2. Read the run log and, if applicable, the agent's session or output file.
+3. For external effects, check the provider result or the action's delivery record. Make repeatable actions safe against duplicate effects.
+4. If the action paused a dependency, confirm that it resumed.
 
-### Agent prompt
+Logs contain action output and may include secrets. Do not share raw prompts, headers, bodies, environment values, or credentials.
 
-Prompt jobs reference a registered profile from `clockwork agent list`. Run `clockwork agent detect` for standard profiles or `clockwork agent add` for a custom binary, fixed arguments, prompt transport, and cwd. A job-level `--cwd` overrides the profile cwd. Missing profiles and invalid working directories fail before mutation.
+## Disable or remove a job
 
-For durable Pi work, create one generic profile per job. Pass model, thinking, tools, approval, `--session-id clockwork-<job>`, and `--session-dir ~/.local/state/clockwork/pi-sessions/<job>` as fixed `--arg` values. Clockwork invokes Pi directly. The job references this profile but does not own it.
+`clockwork job disable <job>` prevents future runs. It does not cancel an action already running.
 
-Scheduled agents start through launchd, so validate the runtime environment instead of relying on the interactive shell.
+`trigger` runs an enabled, idle job immediately. Update and delete reject jobs with a run in flight.
 
-### HTTPS webhook
+Preview deletion with `clockwork job delete <job> --dry-run --json`, get approval, then apply with `--yes --if-revision <revision>`. It removes the runtime job and source directory. Save any needed history first because the history command requires an existing job. Remove an unused profile separately with `clockwork agent rm <name>`.
 
-Webhooks must use HTTPS unless `allow_insecure_http` is explicitly enabled. Keep headers and credentials out of sources, command output, logs, and receipts.
+For service inspection, use `clockwork-service status` and `clockwork-service logs`. The latter prints daemon log paths, not their contents.
 
-## Verify each boundary
+## Restore an installation
 
-Do not treat one success signal as proof of the whole workflow.
-
-1. Scheduler: inspect the matching run in `clockwork job history <job> --json`.
-2. Agent: inspect the agent session, when used, and the run log under `~/.local/state/clockwork/`.
-3. External effect: inspect the job owner's sanitized receipt or provider message ID.
-4. Services: confirm one Clockwork daemon and that any paused dependency resumed.
-
-Do not print prompts, webhook headers or bodies, environment values, message bodies, or credentials.
-
-## Inspect and remove
-
-```sh
-clockwork job status [<job>] --json
-clockwork job history <job> --json
-clockwork job logs <job> --json
-services/clockwork/service.sh logs
-```
-
-Removal is destructive. Preview with `clockwork job delete <job> --dry-run --json`, get approval, then apply with `--yes --if-revision <revision>`. Delete refuses while a run is in flight. It removes the runtime job and source directory. Remove any unneeded agent profile separately with `clockwork agent rm <name>`.
-
-## Rollback
-
-Stop or disable Clockwork first. Confirm that no run or delivery attempt is active. Restore only installer-managed binary, plist, links, and examples from the targeted backup. Preserve `~/.agents/clockwork/` and `~/.local/state/clockwork/`. Get separate approval before reactivating a previous scheduler.
+Before restoring files, stop scheduling and confirm that no action or delivery attempt is active. Restore only the intended binary, plist, or helper files from a known backup. Preserve job definitions and runtime data. Get separate approval before restarting a previous scheduler.

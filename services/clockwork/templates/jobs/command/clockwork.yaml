@@ -1,5 +1,5 @@
 name: example-command
-schedule: "0 9 * * 1-5"
+schedule: "0 9 * * MON-FRI"
 action:
   command:
-    command: "printf 'replace with a reviewed local command\n'"
+    command: "printf 'Clockwork job ran\\n'"

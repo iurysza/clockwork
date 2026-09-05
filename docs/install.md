@@ -1,69 +1,100 @@
-# Install on macOS
+# Install Clockwork
 
-Clockwork releases support Apple silicon and Intel Macs.
+Prebuilt releases support Apple silicon and Intel Macs. Linux users can build from source and use the built-in systemd backend or foreground daemon.
 
-## Install the binary
+## Install the macOS binary
 
-Download the release installer, inspect it if you want to, then run it:
+Download and review the release installer, then run it:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -fsSLO https://github.com/iurysza/clockwork/releases/latest/download/install.sh
 sh install.sh
 ```
 
-The installer downloads the matching `clockwork-<target>.tar.gz` archive and verifies it against `sha256.sum` before it writes `~/.local/bin/clockwork`.
+The installer downloads `clockwork-<target>.tar.gz` and checks its SHA-256 checksum against `sha256.sum` before replacing `~/.local/bin/clockwork`.
 
-The default install does not create jobs, configure an agent, write a launchd plist, or start a service.
+It does not create jobs, configure agents, or start a scheduler. Existing jobs and profiles remain unchanged.
 
-To install a specific version, pass it explicitly:
+If `clockwork` is not on your `PATH`, add the binary directory for the current shell:
 
 ```sh
-sh install.sh --version 0.1.0
+export PATH="$HOME/.local/bin:$PATH"
+clockwork --version
 ```
 
-## Add the background service
+Add the same directory to your shell configuration to keep it available in new terminals.
 
-The optional service adds a job directory, environment file, service helper, and launchd plist:
+For a specific release:
+
+```sh
+sh install.sh --version 0.3.0
+```
+
+## Add the macOS background service
+
+The optional service requires Node.js for installation and checks, and Python 3 for its helper commands. It uses the macOS `launchctl`, `plutil`, and zsh tools.
 
 ```sh
 sh install.sh --with-service
 ```
 
-This requires Node.js. It creates only managed files. It does not load launchd, start a daemon, create jobs, or run an action.
+This installs the binary and service files, including `clockwork-service` and a launchd plist. It does not load the service, create jobs, or run actions. An existing service keeps running.
 
-Register prompt agents separately:
-
-```sh
-clockwork agent detect
-clockwork agent list
-```
-
-Detected Pi profiles run `pi --print --mode json`. Use `clockwork agent add` when a job needs fixed model, tool, approval, session, or cwd arguments.
-
-Inspect the native job commands and check the service with:
+After creating and enabling jobs, start the service:
 
 ```sh
-clockwork job --help
+clockwork-service start
 clockwork-service status
 ```
 
-`clockwork-service` also supports `start`, `restart`, `stop`, `doctor`, and `logs`.
+See the [service guide](../services/clockwork/README.md) for environment settings, diagnostics, and file locations.
 
-Mutating job commands support `--dry-run`, `--yes`, `--if-revision`, and `--json`. Non-interactive callers preview with `--dry-run --json` and apply with `--yes --if-revision <revision>`.
+## Run without the optional service
+
+To keep the scheduler in your terminal:
+
+```sh
+clockwork daemon
+```
+
+It runs until stopped. You do not need Node.js or Python 3 for this mode.
+
+For the built-in OS timer, use one command for your platform:
+
+```sh
+# macOS
+clockwork setup-backend launchd
+
+# Linux with a systemd user session
+clockwork setup-backend systemd
+```
+
+These commands install and enable a dispatcher immediately. Review enabled jobs first. Use only one scheduling setup: the optional service, the built-in timer, or the foreground daemon. Do not start competing dispatchers.
 
 ## Build from source
 
-For development, build the binary with the pinned Rust toolchain:
+From the repository checkout, build with the toolchain pinned in `rust-toolchain.toml`:
 
 ```sh
 cargo build --locked --release
+mkdir -p "$HOME/.local/bin"
 install -m 755 target/release/clockwork "$HOME/.local/bin/clockwork"
 ```
 
-To test the service integration from the checkout, run:
+On macOS, preview the service integration before applying it from the checkout:
 
 ```sh
 node install.mjs
 node install.mjs --apply
 node install.mjs --doctor
 ```
+
+The helper link and plist point into this checkout. Keep it in place while using that installation.
+
+## Update an installation
+
+Run the installer again for the latest binary, or pass `--version` for a specific release. If you use the optional service, include `--with-service` to update its helper files too.
+
+An already running daemon continues using its loaded binary. After reviewing enabled jobs and any active runs, restart the optional service with `clockwork-service restart` to use the updated binary.
+
+Next, [create a job](../README.md#schedule-your-first-agent-job) or [configure an agent profile](./agents.md).

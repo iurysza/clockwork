@@ -135,7 +135,7 @@ fn append_internal_error(log_path: &str, message: &str) {
     writeln!(file, "[clockwork internal error] {message}").ok();
 }
 
-/// Append a structured failure line to `~/.clockwork/failures.log`.
+/// Append a structured failure line to `failures.log` under the Clockwork home.
 fn append_failures_log(
     job_id: &str,
     job_name: &str,

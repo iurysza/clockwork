@@ -8,13 +8,12 @@ use crate::model::action::{Action, HttpMethod};
 use super::error::JobError;
 use super::name::JobName;
 
-/// Managed source definition. Activation is intentionally absent: a
-/// definition describes schedule and action, never whether the job runs.
+/// Job source containing the schedule and action, but no activation state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JobDefinition {
     pub name: JobName,
-    /// Schedule expression (cron, `in Xm/h/d`, `every Xm/h/d`, or ISO-8601).
+    /// Cron, recurring duration, or one-time timestamp. The CLI resolves relative times.
     pub schedule: String,
     pub action: JobAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,8 +112,7 @@ impl JobAction {
         }
     }
 
-    /// Build the runtime action, enforcing the same security policy as every
-    /// other action path (HTTPS-by-default webhooks, input limits).
+    /// Build a runtime action after checking input lengths and webhook URL policy.
     pub fn to_runtime_action(&self, allow_insecure_http: bool) -> Result<Action, JobError> {
         match self {
             Self::Command(cmd) => {
@@ -175,8 +173,7 @@ impl std::fmt::Display for ActionKind {
 }
 
 impl JobDefinition {
-    /// Structural and policy validation. `now` is injected by the caller —
-    /// the definition itself never reads the clock.
+    /// Validate tags, schedule, and action using the caller's timestamp.
     pub fn validate(
         &self,
         now: chrono::DateTime<chrono::Utc>,

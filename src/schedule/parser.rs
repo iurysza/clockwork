@@ -16,7 +16,7 @@ pub fn parse_schedule(input: &str, now: DateTime<Utc>) -> Result<ParsedSchedule>
     if input.is_empty() {
         bail!(
             "Error: Empty schedule string.\n\
-             Accepted examples: 'in 4h', 'every 30m', '0 9 * * 1-5', '2026-03-01T14:00:00Z'"
+             Accepted examples: 'in 4h', 'every 30m', '0 9 * * MON-FRI', '2027-03-01T14:00:00Z'"
         );
     }
 
@@ -57,7 +57,7 @@ pub fn parse_schedule(input: &str, now: DateTime<Utc>) -> Result<ParsedSchedule>
 
     bail!(
         "Error: Could not parse schedule '{input}'.\n\
-         Accepted examples: 'in 4h', '30s', 'every 10s', '0 9 * * 1-5', '2026-03-01T14:00:00Z'"
+         Accepted examples: 'in 4h', '30s', 'every 10s', '0 9 * * MON-FRI', '2027-03-01T14:00:00Z'"
     );
 }
 
@@ -124,7 +124,6 @@ fn parse_relative_recurring(s: &str) -> Result<ParsedSchedule> {
                      Minute interval must be 1-59."
                 );
             }
-            // Sub-minute equivalent: use interval scheduler for < 1m
             (format!("*/{n} * * * *"), format!("every {n} minute(s)"))
         }
         'h' => {
@@ -204,14 +203,13 @@ fn validate_cron_expr(expr: &str) -> Result<()> {
     seven_field.parse::<cron::Schedule>().map_err(|e| {
         anyhow::anyhow!(
             "Error: Invalid cron expression '{expr}': {e}\n\
-             Accepted examples: '0 9 * * 1-5', '*/15 * * * *', '0 0 1 * *'"
+             Accepted examples: '0 9 * * MON-FRI', '*/15 * * * *', '0 0 1 * *'"
         )
     })?;
     Ok(())
 }
 
 fn describe_cron(expr: &str) -> String {
-    // Simple human-readable description for common patterns
     let fields: Vec<&str> = expr.split_whitespace().collect();
     if fields.len() != 5 {
         return format!("cron: {expr}");

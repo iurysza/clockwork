@@ -5,8 +5,7 @@ use crate::model::run_record::LastRun;
 
 use super::name::JobName;
 
-/// Whether future scheduling may claim runs. Stored as runtime operational
-/// state (Paused/Active); never part of a job definition.
+/// Whether the scheduler may claim new runs. Stored separately from the definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Activation {
@@ -23,9 +22,8 @@ impl std::fmt::Display for Activation {
     }
 }
 
-/// Public managed-job state, derived from source + runtime inspection.
-/// Contradictory stored data never becomes a variant — inspection returns
-/// `IntegrityViolation` and mutation stops.
+/// Public job state derived from its source and runtime data.
+/// Inspection rejects contradictory data with `IntegrityViolation`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ManagedJobState {
@@ -92,15 +90,13 @@ impl ManagedJobState {
     }
 }
 
-/// Combined source + runtime revision. `--if-revision` pins a mutation to
-/// the exact inspected state; a stale revision changes nothing.
+/// Revision of the source, runtime job, and referenced profile.
+/// `--if-revision` rejects mutations when any of these has changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateRevision {
     pub source: Option<String>,
     pub runtime: Option<String>,
-    /// Resolved referenced profile state. A profile change after preview
-    /// must surface as `CW_REVISION_CONFLICT`, so the optimistic
-    /// revision pins it alongside source and runtime.
+    /// Resolved profile revision, so profile edits invalidate a job preview.
     pub profile: Option<String>,
 }
 

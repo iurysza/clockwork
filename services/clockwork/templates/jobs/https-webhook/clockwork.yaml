@@ -1,5 +1,5 @@
 name: example-https-webhook
-schedule: "0 9 * * 1-5"
+schedule: "0 9 * * MON-FRI"
 action:
   webhook:
     url: "https://example.invalid/review-before-enabling"

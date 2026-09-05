@@ -27,9 +27,8 @@ pub struct JobResult {
     pub external_effect: ExternalEffect,
 }
 
-/// The imperative shell around the pure planner: acquires snapshots and the
-/// mutation lock, coordinates idempotent runtime/source mutations in safe
-/// order, and verifies the postcondition before reporting success.
+/// Read job state, call the planner, and apply changes under the mutation lock.
+/// Verify the stored result before reporting success.
 pub struct JobService {
     inspector: StateInspector,
     sources: FsSourceStore,
@@ -100,10 +99,8 @@ impl JobService {
         })
     }
 
-    /// Parse every managed source with the same parser the mutation
-    /// commands use — never a second lightweight parser. Parsing is done
-    /// per source so a malformed file is reported, not allowed to abort the
-    /// validation report for every other job.
+    /// Validate sources with the same parser used by mutation commands.
+    /// Report malformed files individually so one error does not hide other results.
     pub fn validate(
         &self,
         name: Option<&JobName>,
@@ -319,8 +316,7 @@ impl JobService {
     }
 
     /// Apply the planned steps in their safe order.
-    // The coordinator is one ordered, lock-scoped sequence: every arm is a
-    // prescribed mutation step, and splitting it would hide the safe order.
+    // Keep the steps together so their execution order is visible.
     #[allow(clippy::too_many_lines)]
     fn coordinate(
         &self,
@@ -537,7 +533,7 @@ impl JobService {
         Ok(Some(actual))
     }
 
-    /// A manual trigger always updates execution receipts. Recurring jobs
+    /// A manual trigger updates the run record. Recurring jobs
     /// remain scheduled, while one-time jobs complete. Both outcomes must
     /// retain the previewed source revision and runtime generation.
     fn verify_trigger_postcondition(

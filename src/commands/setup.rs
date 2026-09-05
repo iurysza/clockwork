@@ -7,8 +7,7 @@ use anyhow::{Result, bail};
 /// Version embedded in installed skill files for tracking.
 const SKILL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-// The one canonical skill, embedded at compile time. Every agent gets the same
-// SKILL.md + reference.md — the converged 2026 format they all read natively.
+// Embed the same skill files for every supported installation target.
 const SKILL_MD: &str = include_str!("../../skills/clockwork/SKILL.md");
 const REFERENCE_MD: &str = include_str!("../../skills/clockwork/reference.md");
 
@@ -39,9 +38,7 @@ pub fn execute(
     let results = collect_install(&opts, &home)?;
 
     if json_output {
-        // One combined document, so `clockwork setup --json` stays parseable by jq
-        // (printing the skills array and a separate agents object would emit two
-        // top-level JSON values).
+        // Keep skills and agent detection in one parseable JSON document.
         let mut doc = serde_json::json!({ "skills": skill_results_json(&results) });
         if !dry_run {
             let agents = super::agent::detect_agents_json(force)?;
@@ -76,9 +73,8 @@ struct InstallOpts<'a> {
     dry_run: bool,
 }
 
-/// Resolve targets and write skill files, returning the per-agent results
-/// without printing — so the caller decides the output format (one combined
-/// JSON document, or human-readable).
+/// Write skill files and return results without printing.
+/// The caller chooses human-readable or JSON output.
 fn collect_install(opts: &InstallOpts<'_>, home: &Path) -> Result<Vec<SkillResult>> {
     let targets = resolve_targets(opts)?;
     if targets.is_empty() {
@@ -117,8 +113,7 @@ fn resolve_targets<'a>(opts: &InstallOpts<'a>) -> Result<Vec<&'a str>> {
         return Ok(vec![name]);
     }
 
-    // --all installs for every supported agent, detected or not (so you can
-    // pre-seed agents you haven't installed yet).
+    // --all also installs skills for agents that are not installed yet.
     if opts.all {
         return Ok(KNOWN_AGENTS.to_vec());
     }
@@ -253,24 +248,15 @@ fn install_for_agent(agent: &str, home: &Path, force: bool, dry_run: bool) -> Sk
     }
 }
 
-/// Return `(files_to_write, target_directory)` for each agent.
-/// Where each agent reads a native `SKILL.md` skill folder, as of 2026.
-///
-/// The landscape converged on one Anthropic-style `SKILL.md` directory:
-/// - Claude Code reads `~/.claude/skills/`.
-/// - Codex, Gemini CLI, `OpenCode`, and Pi read the shared `~/.agents/skills/`
-///   path (Gemini gives it precedence over `~/.gemini/skills/`).
-/// - Cursor has no global skills dir; it reads `.cursor/skills/` per project,
-///   so we install into the current working directory.
-///
-/// Every target gets the same two files — no per-agent variants to drift.
+/// Return the embedded files and their installation directory.
+/// Claude uses `~/.claude/skills/clockwork`. Codex, Gemini CLI, `OpenCode`,
+/// and Pi share `~/.agents/skills/clockwork`. Cursor installs per project.
 fn skill_target(agent: &str, home: &Path) -> (Vec<(&'static str, &'static str)>, PathBuf) {
     let files = vec![("SKILL.md", SKILL_MD), ("reference.md", REFERENCE_MD)];
     let dir = match agent {
         "claude" => home.join(".claude/skills/clockwork"),
         "codex" | "gemini" | "opencode" | "pi" => home.join(".agents/skills/clockwork"),
-        // Cursor reads skills per project — install into the current directory,
-        // resolved to an absolute path so the report shows where it landed.
+        // Report the absolute project path for Cursor's local installation.
         "cursor" => std::env::current_dir()
             .unwrap_or_default()
             .join(".cursor/skills/clockwork"),
@@ -313,16 +299,13 @@ fn display_path(path: &Path, home: &Path) -> String {
 }
 
 fn print_post_install_note(agent: &str, path: Option<&str>, _home: &Path) {
-    // Claude, Codex, Gemini CLI, OpenCode, and Pi auto-discover the native
-    // SKILL.md from their skills directory — no config edit, no note needed.
-    // Cursor is the exception: it has no global skills dir, so the skill lands
-    // in the current project and must be installed per project.
+    // Only Cursor needs a reminder to repeat installation in each project.
     if agent == "cursor" {
         if let Some(p) = path {
             println!();
             println!("Note for Cursor:");
             println!("  Installed into this project at {p}.");
-            println!("  Cursor reads skills per project — run `clockwork setup --agent cursor`");
+            println!("  Cursor reads skills per project. Run `clockwork setup --agent cursor`");
             println!("  in each project where you want clockwork available.");
         }
     }

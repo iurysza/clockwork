@@ -9,7 +9,7 @@ use crate::output::time::{format_datetime, format_datetime_with_relative};
 use crate::schedule::occurrence::{due_after, latest_due, next_after};
 use crate::util::redact;
 
-/// JSON representation for `clockwork list --json`.
+/// Legacy runtime list entry. Managed job output uses `commands::job::view_json`.
 #[derive(Debug, Serialize)]
 pub struct JobListEntry {
     pub id: String,
@@ -57,7 +57,7 @@ impl JobListEntry {
     }
 }
 
-/// JSON representation for `clockwork get --json`.
+/// Legacy runtime detail entry, separate from the managed job status response.
 #[derive(Debug, Serialize)]
 pub struct JobDetail {
     pub id: String,
@@ -214,7 +214,7 @@ impl JobDetail {
     }
 }
 
-/// JSON representation for `clockwork history --json`.
+/// Legacy formatted history entry. Managed job history serializes `RunRecord` directly.
 #[derive(Debug, Serialize)]
 pub struct HistoryEntry {
     pub run_id: String,
