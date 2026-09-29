@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 
 use crate::model::action::Action;
 use crate::model::job::{Job, JobStatus};
-use crate::model::run_record::{LastRun, RunStatus};
+use crate::model::run_record::{LastRun, RunStatus, Trigger};
 use crate::model::schedule::JobSchedule;
 use crate::store::state;
 
@@ -48,6 +48,7 @@ pub(crate) enum RuntimeMutation {
     ClaimRun {
         run_id: String,
         scheduled_for: DateTime<Utc>,
+        trigger: Trigger,
     },
     CompleteRun {
         run_id: String,
@@ -258,6 +259,7 @@ impl FsRuntimeStore {
                     RuntimeMutation::ClaimRun {
                         run_id,
                         scheduled_for,
+                        trigger: Trigger::Scheduled,
                     },
                 )?;
                 claimed = true;
@@ -310,6 +312,7 @@ fn apply_runtime_mutation(job: &mut Job, mutation: RuntimeMutation) -> Result<()
         RuntimeMutation::ClaimRun {
             run_id,
             scheduled_for,
+            trigger,
         } => {
             if job.status != JobStatus::Active {
                 let name = JobName::parse(job.name.as_deref().unwrap_or(&job.id))
@@ -333,6 +336,7 @@ fn apply_runtime_mutation(job: &mut Job, mutation: RuntimeMutation) -> Result<()
                 run_id,
                 scheduled_for,
                 claimed_at: Utc::now(),
+                trigger,
             });
             job.updated_at = Utc::now();
         }
@@ -505,6 +509,7 @@ mod tests {
             RuntimeMutation::ClaimRun {
                 run_id: "run".to_string(),
                 scheduled_for: at(10),
+                trigger: Trigger::Scheduled,
             },
         )
         .expect("first claim");
@@ -515,6 +520,7 @@ mod tests {
             RuntimeMutation::ClaimRun {
                 run_id: "other".to_string(),
                 scheduled_for: at(20),
+                trigger: Trigger::Scheduled,
             },
         );
         assert!(matches!(second, Err(JobError::RunInFlight { .. })));
@@ -528,6 +534,7 @@ mod tests {
             run_id: "other".to_string(),
             scheduled_for: at(10),
             claimed_at: at(10),
+            trigger: Trigger::Scheduled,
         });
         let result = apply_runtime_mutation(
             &mut job,
@@ -554,6 +561,7 @@ mod tests {
             run_id: "run".to_string(),
             scheduled_for: at(10),
             claimed_at: at(10),
+            trigger: Trigger::Scheduled,
         });
         apply_runtime_mutation(
             &mut job,
@@ -577,6 +585,7 @@ mod tests {
             run_id: "run".to_string(),
             scheduled_for: at(10),
             claimed_at: at(10),
+            trigger: Trigger::Scheduled,
         });
         apply_runtime_mutation(
             &mut job,
@@ -597,6 +606,7 @@ mod tests {
             run_id: "run".to_string(),
             scheduled_for: at(10),
             claimed_at: at(10),
+            trigger: Trigger::Scheduled,
         });
         apply_runtime_mutation(
             &mut broken,
@@ -618,6 +628,7 @@ mod tests {
             run_id: "run".to_string(),
             scheduled_for: at(10),
             claimed_at: at(10),
+            trigger: Trigger::Scheduled,
         });
         apply_runtime_mutation(
             &mut job,
@@ -634,6 +645,7 @@ mod tests {
             run_id: "run2".to_string(),
             scheduled_for: at(20),
             claimed_at: at(20),
+            trigger: Trigger::Scheduled,
         });
         let mut successful_run = last_run(RunStatus::Success);
         successful_run.run_id = "run2".to_string();

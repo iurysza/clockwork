@@ -417,6 +417,7 @@ mod tests {
             run_id: "r1".to_string(),
             scheduled_for: now - Duration::seconds(5),
             claimed_at: now - Duration::seconds(5),
+            trigger: crate::model::run_record::Trigger::Scheduled,
         };
         let job = recurring_job(
             JobSchedule::RecurringInterval { every_seconds: 10 },
@@ -437,6 +438,7 @@ mod tests {
             run_id: "r1".to_string(),
             scheduled_for: created_at + Duration::seconds(10),
             claimed_at: created_at + Duration::seconds(10),
+            trigger: crate::model::run_record::Trigger::Scheduled,
         };
         let job = recurring_job(
             JobSchedule::OneShot {

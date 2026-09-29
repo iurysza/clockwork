@@ -96,6 +96,10 @@ fn trigger_previews_without_running_then_records_the_manual_execution() {
     assert_eq!(record["job_id"], "now");
     assert_eq!(record["trigger"], "manual");
     assert_eq!(record["status"], "success");
+    assert_eq!(
+        record["log_path"],
+        format!("logs/now/{}.log", record["run_id"].as_str().unwrap())
+    );
 }
 
 #[test]
@@ -159,6 +163,161 @@ fn trigger_rejects_disabled_and_in_flight_jobs_without_executing() {
     assert_eq!(error["changed"], false);
     assert_eq!(error["error"]["code"], "CW_RUN_IN_FLIGHT");
     assert!(!env.home().join("run-history.jsonl").exists());
+}
+
+#[test]
+fn a_stale_manual_worker_cannot_repeat_a_completed_action() {
+    let env = TestEnv::new();
+    create_and_enable_with_command(&env, "once-only", "every 1h", "echo completed");
+    apply(&env, &["job", "trigger", "once-only"]);
+
+    let history = json(&env, &["job", "history", "once-only", "--json"]);
+    let record = &history["runs"][0];
+    env.cmd()
+        .args([
+            "_internal",
+            "execute",
+            "once-only",
+            "--scheduled-for",
+            record["scheduled_for"].as_str().unwrap(),
+            "--trigger",
+            "manual",
+            "--run-id",
+            record["run_id"].as_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    let after = json(&env, &["job", "history", "once-only", "--json"]);
+    assert_eq!(after["runs"].as_array().unwrap().len(), 1);
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(env.home().join("jobs.json")).unwrap()).unwrap();
+    assert_eq!(state["jobs"]["once-only"]["run_count"], 1);
+}
+
+#[test]
+fn recovery_keeps_manual_trigger_and_existing_log_path() {
+    let env = TestEnv::new();
+    create_and_enable(&env, "recovered", "every 1h");
+    let state_path = env.home().join("jobs.json");
+    let mut state: Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    let claim_time = Utc::now() - Duration::minutes(1);
+    state["jobs"]["recovered"]["in_flight"] = serde_json::json!({
+        "run_id": "abandoned",
+        "scheduled_for": claim_time.to_rfc3339(),
+        "claimed_at": claim_time.to_rfc3339(),
+        "trigger": "manual",
+    });
+    fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let log_dir = env.home().join("logs/recovered");
+    fs::create_dir_all(&log_dir).unwrap();
+    fs::write(log_dir.join("abandoned.log"), "inert marker\n").unwrap();
+
+    env.cmd().args(["_internal", "dispatch"]).assert().success();
+    let history = json(&env, &["job", "history", "recovered", "--json"]);
+    let record = &history["runs"][0];
+    assert_eq!(record["run_id"], "abandoned");
+    assert_eq!(record["trigger"], "manual");
+    assert_eq!(record["status"], "internal_error");
+    assert_eq!(record["log_path"], "logs/recovered/abandoned.log");
+    let state: Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert!(state["jobs"]["recovered"]["in_flight"].is_null());
+    assert_eq!(state["jobs"]["recovered"]["run_count"], 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupted_trigger_leaves_a_worker_to_record_completion() {
+    let env = TestEnv::new();
+    apply(
+        &env,
+        &[
+            "job",
+            "create",
+            "interrupted",
+            "--schedule",
+            "every 1h",
+            "--command",
+            "echo begun; sleep 3; echo completed",
+            "--shell",
+        ],
+    );
+    apply(&env, &["job", "enable", "interrupted"]);
+    // The shell command is inert and exists only in the temporary test state.
+    let preview = json(
+        &env,
+        &["job", "trigger", "interrupted", "--dry-run", "--json"],
+    );
+    let mut cli = std::process::Command::new(assert_cmd::cargo::cargo_bin!("clockwork"))
+        .env("CLOCKWORK_HOME", env.home())
+        .env("CLOCKWORK_JOBS_ROOT", env.jobs_dir())
+        .env("CLOCKWORK_BACKEND", "none")
+        .args([
+            "job",
+            "trigger",
+            "interrupted",
+            "--yes",
+            "--if-revision",
+            preview["revision"].as_str().unwrap(),
+            "--json",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("start test-owned CLI");
+    let deadline = Instant::now() + StdDuration::from_secs(5);
+    let run_id = loop {
+        let state: Value =
+            serde_json::from_str(&fs::read_to_string(env.home().join("jobs.json")).unwrap())
+                .unwrap();
+        if let Some(id) = state["jobs"]["interrupted"]["in_flight"]["run_id"].as_str() {
+            let log = env.home().join(format!("logs/interrupted/{id}.log"));
+            if fs::read_to_string(log).is_ok_and(|contents| contents.contains("begun")) {
+                break id.to_string();
+            }
+        }
+        assert!(Instant::now() < deadline, "test worker did not start");
+        thread::sleep(StdDuration::from_millis(20));
+    };
+
+    let pid = i32::try_from(cli.id()).unwrap();
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+    assert!(!cli.wait().unwrap().success());
+    let state_path = env.home().join("jobs.json");
+    let mut state: Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(state["jobs"]["interrupted"]["in_flight"]["run_id"], run_id);
+    state["jobs"]["interrupted"]["in_flight"]["claimed_at"] =
+        Value::String((Utc::now() - Duration::minutes(1)).to_rfc3339());
+    fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+    env.cmd().args(["_internal", "dispatch"]).assert().success();
+    let state: Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(state["jobs"]["interrupted"]["in_flight"]["run_id"], run_id);
+    assert!(!env.home().join("run-history.jsonl").exists());
+
+    let deadline = Instant::now() + StdDuration::from_secs(8);
+    loop {
+        let history = json(&env, &["job", "history", "interrupted", "--json"]);
+        if let Some(record) = history["runs"].as_array().unwrap().first() {
+            assert_eq!(record["run_id"], run_id);
+            assert_eq!(record["trigger"], "manual");
+            assert_eq!(record["status"], "success");
+            assert_eq!(record["log_path"], format!("logs/interrupted/{run_id}.log"));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "worker did not record completion"
+        );
+        thread::sleep(StdDuration::from_millis(25));
+    }
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(env.home().join("jobs.json")).unwrap()).unwrap();
+    assert!(state["jobs"]["interrupted"]["in_flight"].is_null());
+    assert_eq!(state["jobs"]["interrupted"]["run_count"], 1);
+    assert!(
+        fs::read_to_string(env.home().join(format!("logs/interrupted/{run_id}.log")))
+            .unwrap()
+            .contains("completed")
+    );
 }
 
 #[test]

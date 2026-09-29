@@ -98,6 +98,8 @@ For a relative one-time schedule such as `in 4h`, the preview returns an absolut
 
 `ok: true` on a trigger means the command completed its operation. Check the run's status in history to determine whether the action succeeded.
 
+If the trigger command is interrupted, its worker can still finish the action and record the result. Check history and any external receipt before retrying; an `internal_error` after a worker stops does not prove that an external action failed.
+
 ## Job files
 
 Clockwork stores each source at `~/.agents/clockwork/jobs.d/<name>/clockwork.yaml`. `CLOCKWORK_JOBS_ROOT` overrides that directory.

@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 
 use crate::engine::lock::FileLock;
 use crate::model::invocation::Invocation;
+use crate::model::run_record::Trigger;
 use crate::util::id::new_run_id;
 
 use super::error::JobError;
@@ -271,6 +272,7 @@ impl JobService {
                 RuntimeMutation::ClaimRun {
                     run_id: run_id.clone(),
                     scheduled_for: now,
+                    trigger: Trigger::Manual,
                 },
                 expected.as_deref(),
             )?;
@@ -481,13 +483,16 @@ impl JobService {
         scheduled_for: DateTime<Utc>,
     ) -> Result<(), JobError> {
         let invocation = Invocation::manual(name.as_str(), run_id, scheduled_for);
-        let disposition =
-            crate::engine::executor::execute_invocation(&invocation).map_err(|error| {
+        let mut worker =
+            crate::engine::executor::spawn_claimed_invocation(&invocation).map_err(|error| {
                 JobError::RuntimeFailure {
                     message: format!("{error:#}"),
                 }
             })?;
-        if !disposition.process_succeeded() {
+        let status = worker.wait().map_err(|error| JobError::RuntimeFailure {
+            message: format!("failed to wait for trigger worker: {error}"),
+        })?;
+        if !status.success() {
             return Err(JobError::RuntimeFailure {
                 message: "triggered action failed before normal process completion".to_string(),
             });

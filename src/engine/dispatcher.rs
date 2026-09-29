@@ -1,6 +1,4 @@
-use std::process::Command;
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 
 use crate::engine::lock::FileLock;
@@ -13,6 +11,7 @@ use crate::model::job::JobStatus;
 use crate::model::run_record::{RunRecord, RunStatus, Trigger};
 use crate::store::config::load_config;
 use crate::store::history;
+use crate::store::paths;
 use crate::store::state;
 use crate::store::state::load_state;
 use crate::util::id::new_run_id;
@@ -118,9 +117,9 @@ fn maybe_recover_stale_claim(job_id: &str, now: DateTime<Utc>) -> Result<Option<
     let Some(job) = job_state.jobs.get(job_id).cloned() else {
         return Ok(None);
     };
-    if job.in_flight.is_none() {
+    let Some(claim) = job.in_flight.as_ref() else {
         return Ok(None);
-    }
+    };
 
     let claimed_execution = observe_claimed_execution(job_id)?;
     let ClaimRecovery::Recover { job, record } = recover_claim(
@@ -128,6 +127,7 @@ fn maybe_recover_stale_claim(job_id: &str, now: DateTime<Utc>) -> Result<Option<
         now,
         claimed_execution,
         Duration::seconds(STALE_CLAIM_GRACE_SECONDS),
+        recovered_log_path(job_id, &claim.run_id)?,
     ) else {
         return Ok(None);
     };
@@ -135,6 +135,16 @@ fn maybe_recover_stale_claim(job_id: &str, now: DateTime<Utc>) -> Result<Option<
     job_state.jobs.insert(job_id.to_string(), *job);
     state::save_state(&job_state)?;
     Ok(Some(record))
+}
+
+fn recovered_log_path(job_id: &str, run_id: &str) -> Result<String> {
+    let relative = format!("logs/{job_id}/{run_id}.log");
+    let absolute = paths::job_log_dir(job_id)?.join(format!("{run_id}.log"));
+    Ok(if absolute.exists() {
+        relative
+    } else {
+        String::new()
+    })
 }
 
 fn process_job(job_id: &str, now: DateTime<Utc>) -> Result<()> {
@@ -246,9 +256,13 @@ fn clear_claim_with_internal_error(
         return Ok(None);
     }
 
-    let ClaimRecovery::Recover { job, record } =
-        recover_claim(&job, now, ClaimedExecution::NotRunning, Duration::zero())
-    else {
+    let ClaimRecovery::Recover { job, record } = recover_claim(
+        &job,
+        now,
+        ClaimedExecution::NotRunning,
+        Duration::zero(),
+        recovered_log_path(job_id, run_id)?,
+    ) else {
         return Ok(None);
     };
     job_state.jobs.insert(job_id.to_string(), *job);
@@ -276,69 +290,12 @@ fn skipped_overlap_record(
     }
 }
 
-/// Spawn `clockwork _internal execute <job-id> --scheduled-for <ts> --trigger <trigger>` as a detached process.
+/// Start the already-claimed scheduled execution independently of the dispatcher.
 fn spawn_exec(request: &SpawnRequest) -> Result<()> {
-    let clockwork_bin =
-        std::env::current_exe().context("could not determine clockwork binary path")?;
-    let mut command = Command::new(clockwork_bin);
-    command.args([
-        "_internal",
-        "execute",
+    super::executor::spawn_claimed_invocation(&Invocation::scheduled(
         &request.job_id,
-        "--scheduled-for",
-        &request.scheduled_for.to_rfc3339(),
-        "--trigger",
-        "scheduled",
-        "--run-id",
         &request.run_id,
-    ]);
-    command.stdin(std::process::Stdio::null());
-    command.stdout(std::process::Stdio::null());
-    command.stderr(std::process::Stdio::null());
-    detach_exec_process(&mut command);
-    command.spawn().with_context(|| {
-        format!(
-            "failed to spawn _internal execute for job {}",
-            request.job_id
-        )
-    })?;
+        request.scheduled_for,
+    ))?;
     Ok(())
-}
-
-#[cfg(unix)]
-fn detach_exec_process(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-}
-
-#[cfg(windows)]
-fn detach_exec_process(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-
-    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-}
-
-#[cfg(not(any(unix, windows)))]
-fn detach_exec_process(_command: &mut Command) {}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(windows)]
-    #[test]
-    fn windows_dispatch_spawn_uses_detached_process_flags() {
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        assert_eq!(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, 0x0000_0208);
-    }
 }

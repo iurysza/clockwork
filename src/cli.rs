@@ -294,7 +294,7 @@ pub enum InternalCommands {
     /// Run one scheduler dispatch tick
     Dispatch,
 
-    /// Execute one claimed or manual invocation
+    /// Execute one claimed invocation
     Execute {
         /// Runtime job ID
         job_id: String,
@@ -307,7 +307,7 @@ pub enum InternalCommands {
         #[arg(long, default_value = "scheduled")]
         trigger: String,
 
-        /// Claimed run ID (scheduled runs only)
+        /// Claimed run ID
         #[arg(long)]
         run_id: Option<String>,
     },

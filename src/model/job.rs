@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::action::Action;
-use super::run_record::LastRun;
+use super::run_record::{LastRun, Trigger};
 use super::schedule::JobSchedule;
 
 /// Job status lifecycle.
@@ -42,13 +42,19 @@ impl std::str::FromStr for JobStatus {
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
-/// A durable reservation for a scheduled occurrence.
+/// A durable reservation for an invocation.
 /// This does not prove that action execution has started.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledClaim {
     pub run_id: String,
     pub scheduled_for: DateTime<Utc>,
     pub claimed_at: DateTime<Utc>,
+    #[serde(default = "scheduled_trigger")]
+    pub trigger: Trigger,
+}
+
+fn scheduled_trigger() -> Trigger {
+    Trigger::Scheduled
 }
 
 /// A scheduled job definition.

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 
-use crate::model::invocation::{Invocation, InvocationSource, RunAttempt};
+use crate::model::invocation::{Invocation, RunAttempt};
 use crate::model::job::{Job, JobStatus, ScheduledClaim};
 use crate::model::run_record::{LastRun, RunRecord, RunStatus};
 use crate::schedule::occurrence::{OccurrenceError, due_after, latest_due};
@@ -15,13 +15,12 @@ pub enum ExecutionAvailability {
 pub enum IgnoreReason {
     InactiveJob,
     StaleOrDuplicateClaim,
-    ScheduledLockBusy,
+    ClaimedLockBusy,
 }
 
 #[derive(Debug, Clone)]
 pub enum RunDecision {
     Start(RunAttempt),
-    Skip(RunRecord),
     Ignore(IgnoreReason),
 }
 
@@ -29,40 +28,23 @@ pub fn decide_run(
     job: &Job,
     invocation: &Invocation,
     availability: ExecutionAvailability,
-    observed_at: DateTime<Utc>,
+    _observed_at: DateTime<Utc>,
 ) -> RunDecision {
     if job.status != JobStatus::Active {
         return RunDecision::Ignore(IgnoreReason::InactiveJob);
     }
 
-    if let InvocationSource::Scheduled { occurrence_at } = invocation.source {
-        let claim_matches = job.in_flight.as_ref().is_some_and(|claim| {
-            claim.run_id == invocation.run_id && claim.scheduled_for == occurrence_at
-        });
-        if !claim_matches {
-            return RunDecision::Ignore(IgnoreReason::StaleOrDuplicateClaim);
-        }
+    let claim_matches = job.in_flight.as_ref().is_some_and(|claim| {
+        claim.run_id == invocation.run_id
+            && claim.scheduled_for == invocation.recorded_for()
+            && claim.trigger == invocation.source.trigger()
+    });
+    if !claim_matches {
+        return RunDecision::Ignore(IgnoreReason::StaleOrDuplicateClaim);
     }
 
     if availability == ExecutionAvailability::Busy {
-        return match invocation.source {
-            InvocationSource::Manual => RunDecision::Skip(RunRecord {
-                run_id: invocation.run_id.clone(),
-                job_id: invocation.job_id.clone(),
-                trigger: invocation.source.trigger(),
-                scheduled_for: invocation.recorded_for(),
-                started_at: observed_at,
-                finished_at: observed_at,
-                status: RunStatus::SkippedOverlap,
-                exit_code: None,
-                log_path: String::new(),
-                failed_run_id: None,
-                error_message: None,
-            }),
-            InvocationSource::Scheduled { .. } => {
-                RunDecision::Ignore(IgnoreReason::ScheduledLockBusy)
-            }
-        };
+        return RunDecision::Ignore(IgnoreReason::ClaimedLockBusy);
     }
 
     RunDecision::Start(RunAttempt::from(invocation))
@@ -163,6 +145,7 @@ pub fn plan_dispatch(
             run_id: proposed_run_id.clone(),
             scheduled_for,
             claimed_at: now,
+            trigger: crate::model::run_record::Trigger::Scheduled,
         });
         planned.updated_at = now;
         changed = true;
@@ -191,6 +174,7 @@ pub fn recover_claim(
     now: DateTime<Utc>,
     claimed_execution: ClaimedExecution,
     grace: Duration,
+    log_path: String,
 ) -> ClaimRecovery {
     let Some(claim) = &job.in_flight else {
         return ClaimRecovery::Keep;
@@ -203,13 +187,13 @@ pub fn recover_claim(
     let record = RunRecord {
         run_id: claim.run_id.clone(),
         job_id: job.id.clone(),
-        trigger: crate::model::run_record::Trigger::Scheduled,
+        trigger: claim.trigger,
         scheduled_for: claim.scheduled_for,
         started_at: claim.claimed_at,
         finished_at: now,
         status: RunStatus::InternalError,
         exit_code: None,
-        log_path: String::new(),
+        log_path,
         failed_run_id: None,
         error_message: None,
     };
@@ -336,7 +320,6 @@ pub fn complete_run(
 #[derive(Debug, Clone)]
 pub enum ExecutionDisposition {
     Completed(RunOutcome),
-    Skipped(RunRecord),
     Ignored(IgnoreReason),
 }
 
@@ -345,12 +328,11 @@ impl ExecutionDisposition {
         match self {
             Self::Completed(RunOutcome::InternalError { .. }) => false,
             Self::Completed(_) => true,
-            Self::Skipped(record) => record.status == RunStatus::SkippedOverlap,
             Self::Ignored(reason) => matches!(
                 reason,
                 IgnoreReason::InactiveJob
                     | IgnoreReason::StaleOrDuplicateClaim
-                    | IgnoreReason::ScheduledLockBusy
+                    | IgnoreReason::ClaimedLockBusy
             ),
         }
     }
@@ -418,6 +400,7 @@ mod tests {
             run_id: "run".to_string(),
             scheduled_for: at(10),
             claimed_at: at(10),
+            trigger: crate::model::run_record::Trigger::Scheduled,
         });
         let invocation = Invocation::scheduled("job", "run", at(10));
 
@@ -457,27 +440,83 @@ mod tests {
             run_id: "run".to_string(),
             scheduled_for: at(10),
             claimed_at: at(10),
+            trigger: crate::model::run_record::Trigger::Scheduled,
         });
         let invocation = Invocation::scheduled("job", "run", at(10));
 
         assert!(matches!(
             decide_run(&job, &invocation, ExecutionAvailability::Busy, at(11)),
-            RunDecision::Ignore(IgnoreReason::ScheduledLockBusy)
+            RunDecision::Ignore(IgnoreReason::ClaimedLockBusy)
         ));
     }
 
     #[test]
-    fn busy_manual_run_is_recorded_as_overlap() {
-        let job = job(JobSchedule::RecurringInterval { every_seconds: 10 });
+    fn busy_manual_run_does_not_duplicate_history() {
+        let mut job = job(JobSchedule::RecurringInterval { every_seconds: 10 });
+        job.in_flight = Some(ScheduledClaim {
+            run_id: "manual".to_string(),
+            scheduled_for: at(11),
+            claimed_at: at(11),
+            trigger: crate::model::run_record::Trigger::Manual,
+        });
         let invocation = Invocation::manual("job", "manual", at(11));
 
-        let RunDecision::Skip(record) =
-            decide_run(&job, &invocation, ExecutionAvailability::Busy, at(12))
-        else {
-            panic!("expected overlap record");
-        };
-        assert_eq!(record.status, RunStatus::SkippedOverlap);
-        assert_eq!(record.trigger, crate::model::run_record::Trigger::Manual);
+        assert!(matches!(
+            decide_run(&job, &invocation, ExecutionAvailability::Busy, at(12)),
+            RunDecision::Ignore(IgnoreReason::ClaimedLockBusy)
+        ));
+    }
+
+    #[test]
+    fn stale_manual_claim_is_ignored() {
+        let mut job = job(JobSchedule::RecurringInterval { every_seconds: 10 });
+        let invocation = Invocation::manual("job", "manual", at(11));
+        assert!(matches!(
+            decide_run(&job, &invocation, ExecutionAvailability::Available, at(12)),
+            RunDecision::Ignore(IgnoreReason::StaleOrDuplicateClaim)
+        ));
+        job.in_flight = Some(ScheduledClaim {
+            run_id: "another-run".to_string(),
+            scheduled_for: at(11),
+            claimed_at: at(11),
+            trigger: crate::model::run_record::Trigger::Scheduled,
+        });
+        assert!(matches!(
+            decide_run(&job, &invocation, ExecutionAvailability::Available, at(12)),
+            RunDecision::Ignore(IgnoreReason::StaleOrDuplicateClaim)
+        ));
+        job.in_flight.as_mut().unwrap().run_id = "manual".to_string();
+        assert!(matches!(
+            decide_run(&job, &invocation, ExecutionAvailability::Available, at(12)),
+            RunDecision::Ignore(IgnoreReason::StaleOrDuplicateClaim)
+        ));
+    }
+
+    #[test]
+    fn old_claims_default_to_scheduled() {
+        let claim: ScheduledClaim = serde_json::from_value(serde_json::json!({
+            "run_id": "old-run",
+            "scheduled_for": at(10),
+            "claimed_at": at(10),
+        }))
+        .unwrap();
+        assert_eq!(claim.trigger, crate::model::run_record::Trigger::Scheduled);
+    }
+
+    #[test]
+    fn matching_manual_claim_starts() {
+        let mut job = job(JobSchedule::RecurringInterval { every_seconds: 10 });
+        job.in_flight = Some(ScheduledClaim {
+            run_id: "manual".to_string(),
+            scheduled_for: at(11),
+            claimed_at: at(11),
+            trigger: crate::model::run_record::Trigger::Manual,
+        });
+        let invocation = Invocation::manual("job", "manual", at(11));
+        assert!(matches!(
+            decide_run(&job, &invocation, ExecutionAvailability::Available, at(12)),
+            RunDecision::Start(_)
+        ));
     }
 
     #[test]
@@ -506,6 +545,7 @@ mod tests {
             run_id: "run".to_string(),
             scheduled_for: at(10),
             claimed_at: at(10),
+            trigger: crate::model::run_record::Trigger::Scheduled,
         });
         let plan = plan_dispatch(
             &job,
@@ -526,6 +566,7 @@ mod tests {
             run_id: "run".to_string(),
             scheduled_for: at(10),
             claimed_at: at(10),
+            trigger: crate::model::run_record::Trigger::Scheduled,
         });
 
         let ClaimRecovery::Recover { job, record } = recover_claim(
@@ -533,6 +574,7 @@ mod tests {
             at(21),
             ClaimedExecution::NotRunning,
             Duration::seconds(10),
+            String::new(),
         ) else {
             panic!("expected claim recovery");
         };

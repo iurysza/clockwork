@@ -44,14 +44,22 @@ pub fn execute_invocation(invocation: &Invocation) -> Result<ExecutionDispositio
         ExecutionAvailability::Busy
     };
 
-    match decide_run(&job, invocation, availability, observed_at) {
+    // Recovery can clear a claim between the first read and lock acquisition.
+    // Recheck it while holding the job lock before starting an external effect.
+    let job = if job_lock.is_some() {
+        let current = state::load_job(&invocation.job_id)?
+            .with_context(|| format!("Job not found: {}", invocation.job_id))?;
+        crate::job::inspect::StateInspector::new()
+            .verify_managed_runtime(&current, Utc::now())
+            .map_err(anyhow::Error::from)?;
+        current
+    } else {
+        job
+    };
+    match decide_run(&job, invocation, availability, Utc::now()) {
         RunDecision::Start(attempt) => {
             let _job_lock = job_lock.context("available job lock was not retained")?;
             execute_attempt(&job, &attempt)
-        }
-        RunDecision::Skip(record) => {
-            history::append_record(&record)?;
-            Ok(ExecutionDisposition::Skipped(record))
         }
         RunDecision::Ignore(reason) => Ok(ExecutionDisposition::Ignored(reason)),
     }
@@ -165,6 +173,35 @@ fn append_failures_log(
         .and_then(|mut f| f.write_all(line.as_bytes()));
 }
 
+/// Start a claimed invocation in a separate session so losing the CLI or
+/// dispatcher cannot strand its action without an executor and job lock.
+pub(crate) fn spawn_claimed_invocation(invocation: &Invocation) -> Result<std::process::Child> {
+    let clockwork_bin =
+        std::env::current_exe().context("could not determine clockwork binary path")?;
+    let mut cmd = Command::new(clockwork_bin);
+    cmd.args([
+        "_internal",
+        "execute",
+        &invocation.job_id,
+        "--scheduled-for",
+        &invocation.recorded_for().to_rfc3339(),
+        "--trigger",
+        &invocation.source.trigger().to_string(),
+        "--run-id",
+        &invocation.run_id,
+    ]);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    detach_fallback_process(&mut cmd);
+    cmd.spawn().with_context(|| {
+        format!(
+            "failed to spawn _internal execute for job {}",
+            invocation.job_id
+        )
+    })
+}
+
 /// Spawn `clockwork _internal exec-fallback` after a failed invocation.
 fn spawn_fallback(
     job_id: &str,
@@ -229,7 +266,16 @@ fn detach_fallback_process(cmd: &mut Command) {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn detach_fallback_process(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(not(any(unix, windows)))]
 fn detach_fallback_process(_cmd: &mut Command) {}
 
 /// Execute a fallback command for a failed job. Called from `_internal exec-fallback`.

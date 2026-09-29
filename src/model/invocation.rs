@@ -95,8 +95,8 @@ impl From<&Invocation> for RunAttempt {
 
 #[derive(Debug, Error)]
 pub enum InvocationInputError {
-    #[error("Missing --run-id for scheduled execution")]
-    MissingScheduledRunId,
+    #[error("Missing --run-id for claimed execution")]
+    MissingRunId,
     #[error("Fallback runs use the dedicated _internal exec-fallback command")]
     FallbackIsNotPrimary,
 }

@@ -2,10 +2,10 @@ use anyhow::Result;
 use chrono::DateTime;
 
 use crate::engine::executor;
+use crate::engine::policy::ExecutionDisposition;
 use crate::model::invocation::{Invocation, InvocationInputError};
 use crate::model::run_record::Trigger;
 use crate::store::paths;
-use crate::util::id::new_run_id;
 
 pub fn execute(
     job_id: &str,
@@ -26,16 +26,20 @@ pub fn execute(
     let invocation = match trigger {
         Trigger::Scheduled => Invocation::scheduled(
             job_id,
-            run_id.ok_or(InvocationInputError::MissingScheduledRunId)?,
+            run_id.ok_or(InvocationInputError::MissingRunId)?,
             scheduled_for_dt,
         ),
         Trigger::Manual => Invocation::manual(
             job_id,
-            run_id.map_or_else(new_run_id, str::to_string),
+            run_id.ok_or(InvocationInputError::MissingRunId)?,
             scheduled_for_dt,
         ),
         Trigger::Fallback => return Err(InvocationInputError::FallbackIsNotPrimary.into()),
     };
 
-    Ok(executor::execute_invocation(&invocation)?.process_succeeded())
+    let disposition = executor::execute_invocation(&invocation)?;
+    Ok(!matches!(
+        (trigger, &disposition),
+        (Trigger::Manual, ExecutionDisposition::Ignored(_))
+    ) && disposition.process_succeeded())
 }
