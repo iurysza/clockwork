@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/iurysza/clockwork/compare/v0.3.0...v0.3.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **trigger:** preserve manual runs after caller interruption ([04c8a3e](https://github.com/iurysza/clockwork/commit/04c8a3ef5c03dc8f89f0da8d3173fb15c1cbd2a2))
+
 ## [0.3.0](https://github.com/iurysza/clockwork/compare/v0.2.0...v0.3.0) (2026-09-04)
 
 
