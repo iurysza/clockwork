@@ -1,0 +1,107 @@
+name: Dependabot auto-merge
+
+# Squash-merge Dependabot pull requests after Verify succeeds.
+# Semver-major updates stay open for a human.
+#
+# `gh pr merge --auto` waits only for required status checks. This repository
+# has no ruleset that requires the Verify job, so auto-merge alone could land
+# the pull request before CI finishes. The job polls that check first, then
+# enables squash auto-merge so any other branch protection still applies.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Leave semver-major updates open
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: echo "Semver-major update; leaving the pull request for a human."
+
+      - name: Squash-merge after Verify
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          classify='
+            [ .[] | select(.name == "verify" and .workflow == "Verify") ]
+            | if length == 0 then "missing"
+              elif any(.[]; .bucket == "fail" or .bucket == "cancel") then "fail"
+              elif any(.[]; .bucket == "pending") then "pending"
+              elif all(.[]; .bucket == "pass") then "pass"
+              else "blocked"
+              end
+          '
+
+          empty_reads=0
+          deadline=$((SECONDS + 4800))
+          while (( SECONDS < deadline )); do
+            result=$(gh pr checks "$PR_URL" --json name,workflow,bucket,state --jq "$classify" || true)
+            echo "Verify check: ${result:-unread}"
+
+            case "$result" in
+              pass)
+                for attempt in 1 2 3 4 5 6; do
+                  if gh pr merge "$PR_URL" --auto --squash --match-head-commit "$HEAD_SHA"; then
+                    exit 0
+                  fi
+                  view=$(gh pr view "$PR_URL" --json state,headRefOid --jq '[.state, .headRefOid] | @tsv')
+                  state=${view%%$'\t'*}
+                  oid=${view#*$'\t'}
+                  if [ "$state" = "MERGED" ]; then
+                    exit 0
+                  fi
+                  if [ "$oid" != "$HEAD_SHA" ]; then
+                    echo "Pull request head moved; leaving this run."
+                    exit 0
+                  fi
+                  echo "Squash-merge was not accepted yet (attempt ${attempt})."
+                  sleep 15
+                done
+                echo "Squash-merge did not succeed."
+                exit 1
+                ;;
+              fail|blocked)
+                echo "Verify did not pass. Leaving the pull request open."
+                exit 1
+                ;;
+              missing|pending)
+                empty_reads=0
+                sleep 20
+                ;;
+              *)
+                empty_reads=$((empty_reads + 1))
+                if [ "$empty_reads" -ge 5 ]; then
+                  echo "Could not read the Verify check."
+                  exit 1
+                fi
+                sleep 20
+                ;;
+            esac
+          done
+
+          echo "Timed out waiting for Verify."
+          exit 1
