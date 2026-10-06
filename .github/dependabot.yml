@@ -22,3 +22,6 @@ updates:
         update-types:
           - minor
           - patch
+    # Tags are Rust versions, including future tags Dependabot treats as releases.
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
