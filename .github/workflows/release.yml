@@ -15,9 +15,9 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
 
-      - uses: dtolnay/rust-toolchain@1.96.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - name: Install cargo-dist
         run: rustup run 1.96.1 cargo install cargo-dist --version 0.32.0 --locked
