@@ -48,19 +48,14 @@ pub fn load_records(job_id: Option<&str>, limit: Option<usize>) -> Result<Vec<Ru
         if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_str::<RunRecord>(trimmed) {
-            Ok(record) => {
-                if let Some(jid) = job_id {
-                    if record.job_id == jid {
-                        records.push(record);
-                    }
-                } else {
+        // Skip malformed lines gracefully.
+        if let Ok(record) = serde_json::from_str::<RunRecord>(trimmed) {
+            if let Some(jid) = job_id {
+                if record.job_id == jid {
                     records.push(record);
                 }
-            }
-            Err(_) => {
-                // Skip malformed lines gracefully
-                continue;
+            } else {
+                records.push(record);
             }
         }
     }

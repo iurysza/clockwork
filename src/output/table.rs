@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use chrono::{DateTime, Utc};
 
 use crate::model::action::Action;
@@ -132,10 +134,11 @@ pub fn format_job_table(jobs: &[&Job], consecutive_failure_threshold: u32) -> St
             } else {
                 "failures"
             };
-            card.push_str(&format!(
+            let _ = write!(
+                card,
                 "\n           ⚠  {} consecutive {noun}",
                 job.consecutive_failures,
-            ));
+            );
         }
 
         blocks.push(card);

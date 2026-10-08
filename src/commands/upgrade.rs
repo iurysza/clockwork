@@ -43,16 +43,14 @@ pub fn execute(force: bool, json_output: bool) -> Result<()> {
 /// Regenerate the backend dispatcher service files after upgrade so any fixes
 /// (e.g. KillMode=process) take effect immediately without a manual repair step.
 fn regenerate_dispatcher(json_output: bool) {
-    match backend::detect_backend() {
-        Ok(be) => {
-            if let Err(e) = be.ensure_dispatcher() {
-                if !json_output {
-                    eprintln!("Warning: Could not update dispatcher service files: {e:#}");
-                }
-            } else if !json_output {
-                println!("Dispatcher service files updated.");
+    // No supported backend (for example, daemon mode) skips this step.
+    if let Ok(be) = backend::detect_backend() {
+        if let Err(e) = be.ensure_dispatcher() {
+            if !json_output {
+                eprintln!("Warning: Could not update dispatcher service files: {e:#}");
             }
+        } else if !json_output {
+            println!("Dispatcher service files updated.");
         }
-        Err(_) => {} // No supported backend (e.g. daemon mode) — skip silently
     }
 }
