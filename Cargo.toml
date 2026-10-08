@@ -32,7 +32,7 @@ shell-words = "1"
 url = "2"
 ctrlc = "3"
 libc = "0.2"
-sha2 = "0.10"
+sha2 = "0.11"
 flate2 = "1"
 tar = "0.4"
 
