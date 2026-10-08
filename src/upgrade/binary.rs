@@ -42,7 +42,7 @@ fn extract_binary(archive_bytes: &[u8]) -> Result<Vec<u8>> {
 fn verify_checksum(data: &[u8], checksums_txt: &str, filename: &str) -> Result<String> {
     let mut hasher = Sha256::new();
     hasher.update(data);
-    let digest = format!("{:x}", hasher.finalize());
+    let digest = lowercase_hex(&hasher.finalize());
 
     for line in checksums_txt.lines() {
         // Format: "<hash>  <filename>" or "<hash> <filename>"
@@ -58,6 +58,19 @@ fn verify_checksum(data: &[u8], checksums_txt: &str, filename: &str) -> Result<S
         }
     }
     bail!("No checksum entry found for {filename} in sha256.sum")
+}
+
+/// Lowercase hexadecimal encoding, two digits per byte.
+///
+/// sha2 0.11's digest type does not implement [`std::fmt::LowerHex`]. This matches the
+/// lowercase hex previously produced by `format!("{:x}", hasher.finalize())`.
+fn lowercase_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 /// Replace the binary at `current_path` atomically.
@@ -135,7 +148,7 @@ mod tests {
 
     use flate2::{Compression, write::GzEncoder};
 
-    use super::{archive_name, extract_binary};
+    use super::{archive_name, extract_binary, verify_checksum};
 
     #[test]
     fn names_clockwork_release_archives() {
@@ -164,5 +177,17 @@ mod tests {
             extract_binary(&bytes).expect("archive must contain clockwork"),
             body
         );
+    }
+
+    #[test]
+    fn checksum_digest_is_lowercase_sha256_hex() {
+        // SHA-256("abc") — FIPS 180-4 test vector.
+        let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let filename = "clockwork-aarch64-apple-darwin.tar.gz";
+        let checksums = format!("{expected}  {filename}\n");
+
+        let digest = verify_checksum(b"abc", &checksums, filename).expect("checksum must match");
+
+        assert_eq!(digest, expected);
     }
 }
