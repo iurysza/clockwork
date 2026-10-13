@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 
 use anyhow::{Context, Result};
-use fs4::fs_std::FileExt;
+use fs4::{FileExt, TryLockError};
 
 use crate::store::paths;
 
@@ -42,7 +42,9 @@ impl FileLock {
         ensure_lock_parent(path)?;
         let file = File::create(path)
             .with_context(|| format!("failed to create lock file: {}", path.display()))?;
-        file.lock_exclusive()
+        // UFCS keeps the call on fs4. Method syntax trips `unstable_name_collisions`
+        // because `std::fs::File::lock` is not stable on the 1.87 toolchain.
+        FileExt::lock(&file)
             .with_context(|| format!("failed to acquire lock: {}", path.display()))?;
         Ok(Self { _file: file })
     }
@@ -51,27 +53,11 @@ impl FileLock {
         ensure_lock_parent(path)?;
         let file = File::create(path)
             .with_context(|| format!("failed to create lock file: {}", path.display()))?;
-        match file.try_lock_exclusive() {
+        match FileExt::try_lock(&file) {
             Ok(()) => Ok(Some(Self { _file: file })),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(e) => {
-                // On some systems the error kind differs; check raw OS error
-                // On some Unix systems, the error code may differ
-                #[cfg(unix)]
-                {
-                    // EWOULDBLOCK (11) and EAGAIN (11) on Linux/macOS
-                    if matches!(e.raw_os_error(), Some(11 | 35)) {
-                        return Ok(None);
-                    }
-                }
-                #[cfg(windows)]
-                {
-                    // ERROR_LOCK_VIOLATION
-                    if matches!(e.raw_os_error(), Some(33)) {
-                        return Ok(None);
-                    }
-                }
-                Err(e).with_context(|| format!("failed to acquire lock: {}", path.display()))
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => {
+                Err(error).with_context(|| format!("failed to acquire lock: {}", path.display()))
             }
         }
     }
@@ -82,4 +68,47 @@ fn ensure_lock_parent(path: &std::path::Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_blocking_lock_returns_none_while_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("job.lock");
+
+        let held = FileLock::acquire_non_blocking_path(&path)
+            .unwrap()
+            .expect("lock should be free");
+        assert!(
+            FileLock::acquire_non_blocking_path(&path)
+                .unwrap()
+                .is_none()
+        );
+
+        drop(held);
+        assert!(
+            FileLock::acquire_non_blocking_path(&path)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn blocking_lock_excludes_a_non_blocking_acquire() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.lock");
+
+        let held = FileLock::acquire_blocking(&path).unwrap();
+        assert!(
+            FileLock::acquire_non_blocking_path(&path)
+                .unwrap()
+                .is_none()
+        );
+        drop(held);
+
+        FileLock::acquire_blocking(&path).unwrap();
+    }
 }
